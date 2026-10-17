@@ -50,6 +50,11 @@ struct ChapterListView: View {
         .focused($pageFocused)
         .onAppear { pageFocused = true }
         .marksDocumentOpen(document.id)
+        // Time left and chapter lengths follow the timing settings once the
+        // document's pace is worked out, and again after they change.
+        .task(id: ReadingPace.shared.key(for: document)) {
+            ReadingPace.shared.prepare(document)
+        }
         .onKeyPress(.escape) {
             dismiss()
             return .handled
@@ -118,13 +123,15 @@ struct ChapterListView: View {
     }
 
     private func progressSummary(status: ReadingStatus) -> some View {
-        let minutesLeft = document.remainingMinutes
+        let minutesLeft = ReadingPace.shared.remainingMinutes(for: document)
+        // The speed stands beside the time, not under it: the time also
+        // counts the timing settings.
         return VStack(spacing: 6) {
             ReadingProgressBar(progress: document.progress)
             HStack {
                 Text(status.label)
                 Spacer()
-                Text("\(ReadingTime.label(minutes: minutesLeft)) left at \(document.wordsPerMinute) wpm")
+                Text("\(ReadingTime.label(minutes: minutesLeft)) left · \(document.wordsPerMinute) wpm")
             }
             .font(StrobeTheme.metadataFont)
             .foregroundStyle(.secondary)
@@ -132,7 +139,7 @@ struct ChapterListView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Progress")
-        .accessibilityValue("\(status.label), \(ReadingTime.spokenLabel(minutes: minutesLeft)) left at \(document.wordsPerMinute) words per minute")
+        .accessibilityValue("\(status.label), \(ReadingTime.spokenLabel(minutes: minutesLeft)) left, \(document.wordsPerMinute) words per minute")
     }
 
     // MARK: - Chapters
@@ -142,6 +149,7 @@ struct ChapterListView: View {
         let chapters = document.chapters
         let totalWordCount = document.wordCount
         let currentIndex = currentChapterIndex(in: chapters)
+        let paceFactor = ReadingPace.shared.factor(for: document) ?? 1
 
         return VStack(alignment: .leading, spacing: 8) {
             Text("Chapters")
@@ -153,7 +161,11 @@ struct ChapterListView: View {
             LazyVStack(spacing: 0) {
                 ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
                     let (start, end) = Self.chapterBounds(at: index, chapters: chapters, totalWordCount: totalWordCount)
-                    let minutes = ReadingTime.minutes(words: max(0, end - start), wordsPerMinute: document.wordsPerMinute)
+                    let minutes = ReadingTime.minutes(
+                        words: max(0, end - start),
+                        wordsPerMinute: document.wordsPerMinute,
+                        paceFactor: paceFactor
+                    )
                     let state = rowState(at: index, currentIndex: currentIndex, chapters: chapters)
 
                     NavigationLink(value: ReaderRoute(

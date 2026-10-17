@@ -126,8 +126,14 @@ struct GetReadingProgressIntent: AppIntent {
         }
 
         let status = target.readingStatus
+        // A spoken answer can't update later, so it waits for the document's
+        // pace if that isn't known yet.
+        var paceFactor: Double?
+        if status != .finished {
+            paceFactor = await ReadingPace.shared.preparedFactor(for: target)
+        }
         let title = target.title
-        let timeLeft = ReadingTime.spokenLabel(minutes: target.remainingMinutes)
+        let timeLeft = ReadingTime.spokenLabel(minutes: target.remainingMinutes(paceFactor: paceFactor))
         let dialog: IntentDialog
         switch status {
         case .new:

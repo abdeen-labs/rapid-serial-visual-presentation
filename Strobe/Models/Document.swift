@@ -110,9 +110,12 @@ final class Document {
 
     /// Stores freshly computed complexity scores (a backfill for documents
     /// imported before complexity timing existed) and refreshes the cache.
+    /// The reading-time estimate's pace was timed without them, so it's
+    /// dropped too.
     func storeComplexityScores(_ scores: [Float]) {
         complexityBlob = scores.isEmpty ? nil : ComplexityStorage.encode(scores)
         cachedComplexity = scores.isEmpty ? nil : scores
+        ReadingPace.shared.forget(id)
     }
 
     /// Migrates words from the legacy `words` array to the `wordsBlob` external storage format.

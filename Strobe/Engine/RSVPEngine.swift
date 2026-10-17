@@ -206,12 +206,19 @@ final class RSVPEngine {
     }
 
     private func setChapters(_ chapters: [Chapter]) {
-        chaptersByIndex = Dictionary(
-            chapters.filter { words.indices.contains($0.wordIndex) && !$0.title.isEmpty }
+        chaptersByIndex = Self.announcedChapters(chapters, wordCount: words.count)
+        readingStarts = ChapterHeading.readingStarts(for: chaptersByIndex, in: words)
+    }
+
+    /// The chapters playback announces, by the index of their first word:
+    /// those with a title that start inside the document. The first of two
+    /// at one index wins.
+    nonisolated static func announcedChapters(_ chapters: [Chapter], wordCount: Int) -> [Int: Chapter] {
+        Dictionary(
+            chapters.filter { (0..<max(0, wordCount)).contains($0.wordIndex) && !$0.title.isEmpty }
                 .map { ($0.wordIndex, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        readingStarts = ChapterHeading.readingStarts(for: chaptersByIndex, in: words)
     }
 
     /// Where reading goes on after the announcement of the chapter starting
@@ -363,20 +370,44 @@ final class RSVPEngine {
         }
     }
 
-    /// Whether a blank follows the current word: it ends a sentence and the
-    /// next word doesn't open a chapter, whose announcement is a break of its
-    /// own.
     private func breaksAfterCurrentWord() -> Bool {
-        guard sentenceBreakEnabled, sentenceBreakLength > 0,
-              chaptersByIndex[currentIndex + 1] == nil else { return false }
-        return SentenceBreak.endsSentence(at: currentIndex, in: words)
+        Self.breaksAfterWord(
+            at: currentIndex,
+            in: words,
+            nextWordStartsChapter: chaptersByIndex[currentIndex + 1] != nil,
+            timing: timing
+        )
     }
 
     /// The blank's time after a sentence. Internal so it can be verified
     /// without wall-clock sleeps in tests.
     func sentenceBreakInterval() -> TimeInterval {
-        guard sentenceBreakEnabled else { return 0 }
-        return baseInterval * max(0, sentenceBreakLength)
+        Self.sentenceBreakInterval(timing: timing, baseInterval: baseInterval)
+    }
+
+    /// Whether a blank follows the word at `index`: it ends a sentence and the
+    /// next word doesn't open a chapter, whose announcement is a break of its
+    /// own.
+    nonisolated static func breaksAfterWord(
+        at index: Int,
+        in words: [String],
+        nextWordStartsChapter: Bool,
+        timing: ReaderSettings.TimingSnapshot
+    ) -> Bool {
+        guard timing.sentenceBreakEnabled, timing.sentenceBreakLength > 0,
+              !nextWordStartsChapter else { return false }
+        return SentenceBreak.endsSentence(at: index, in: words)
+    }
+
+    /// The blank's time after a sentence, at `baseInterval` per word: one
+    /// word's time at the playback speed, so it follows WPM but none of the
+    /// word's own timing.
+    nonisolated static func sentenceBreakInterval(
+        timing: ReaderSettings.TimingSnapshot,
+        baseInterval: TimeInterval
+    ) -> TimeInterval {
+        guard timing.sentenceBreakEnabled else { return 0 }
+        return baseInterval * max(0, timing.sentenceBreakLength)
     }
 
     private func announceChapterIfNeeded() -> Bool {
@@ -393,18 +424,56 @@ final class RSVPEngine {
     /// The display time for the current word. Internal so the way the timing
     /// features compose can be verified without wall-clock sleeps in tests.
     func nextInterval() -> TimeInterval {
+        Self.interval(
+            forWordAt: currentIndex,
+            in: words,
+            complexityScores: complexityScores,
+            timing: timing,
+            baseInterval: baseInterval
+        )
+    }
+
+    /// The timing settings as one value, for the shared per-word math.
+    private var timing: ReaderSettings.TimingSnapshot {
+        ReaderSettings.TimingSnapshot(
+            smartTimingEnabled: smartTimingEnabled,
+            sentencePauseEnabled: sentencePauseEnabled,
+            smartTimingPercentPerLetter: smartTimingPercentPerLetter,
+            smartTimingMinimumWordLength: smartTimingMinimumWordLength,
+            sentencePauseMultiplier: sentencePauseMultiplier,
+            complexityTimingEnabled: complexityTimingEnabled,
+            complexityIntensity: complexityIntensity,
+            punctuationPauses: punctuationPauses,
+            sentenceBreakEnabled: sentenceBreakEnabled,
+            sentenceBreakLength: sentenceBreakLength
+        )
+    }
+
+    /// The display time for the word at `index` under `timing`, at
+    /// `baseInterval` per plain word. Playback and ``ReadingPace``'s
+    /// estimates both time words here, so the two can't drift apart. Every
+    /// term scales with `baseInterval`, so a word takes the same number of
+    /// base intervals at any speed.
+    nonisolated static func interval(
+        forWordAt index: Int,
+        in words: [String],
+        complexityScores: [Float]?,
+        timing: ReaderSettings.TimingSnapshot,
+        baseInterval: TimeInterval
+    ) -> TimeInterval {
+        let word = words.indices.contains(index) ? words[index] : ""
         var interval = baseInterval
         var wordTime = 1.0
 
         // Punctuation pauses own all punctuation timing while they are on, so
         // smart timing drops its own trailing-punctuation bonus rather than
         // pausing twice for the same mark.
-        if smartTimingEnabled {
-            wordTime = Self.smartTimingMultiplier(
-                for: currentWord,
-                percentPerLetter: smartTimingPercentPerLetter,
-                minimumWordLength: smartTimingMinimumWordLength,
-                punctuationBonus: !sentencePauseEnabled
+        if timing.smartTimingEnabled {
+            wordTime = smartTimingMultiplier(
+                for: word,
+                percentPerLetter: timing.smartTimingPercentPerLetter,
+                minimumWordLength: timing.smartTimingMinimumWordLength,
+                punctuationBonus: !timing.sentencePauseEnabled
             )
         }
 
@@ -412,22 +481,22 @@ final class RSVPEngine {
         // it: smart timing has already counted every letter, so each part
         // contributes only its per-word share. Pauses and complexity then
         // scale the whole word.
-        wordTime += CompoundWord.additionalIntervals(for: currentWord)
+        wordTime += CompoundWord.additionalIntervals(for: word)
         // An acronym's further letter names add their share the same way.
-        wordTime += Acronym.additionalIntervals(at: currentIndex, in: words)
+        wordTime += Acronym.additionalIntervals(at: index, in: words)
         interval *= wordTime
 
-        if sentencePauseEnabled {
-            interval *= punctuationPauses.multiplier(
-                for: PunctuationMarks.marks(in: currentWord),
-                sentenceEnd: sentencePauseMultiplier
+        if timing.sentencePauseEnabled {
+            interval *= timing.punctuationPauses.multiplier(
+                for: PunctuationMarks.marks(in: word),
+                sentenceEnd: timing.sentencePauseMultiplier
             )
         }
 
-        if complexityTimingEnabled, let scores = complexityScores,
-           currentIndex < scores.count {
-            let score = Double(scores[currentIndex])
-            interval *= Self.complexityMultiplier(score: score, intensity: complexityIntensity)
+        if timing.complexityTimingEnabled, let scores = complexityScores,
+           scores.indices.contains(index) {
+            let score = Double(scores[index])
+            interval *= complexityMultiplier(score: score, intensity: timing.complexityIntensity)
         }
 
         return interval

@@ -8,12 +8,14 @@ import AppIntents
 /// recognizes in shortcut phrases.
 ///
 /// Refreshes after every save to the library, from any context. Reading
-/// progress, imports, renames, deletions, and synced changes all save.
+/// progress, imports, renames, deletions, and synced changes all save. Also
+/// refreshes when ``ReadingPace`` changes the up-next document's time left.
 final class LibraryObserver {
     private static var current: LibraryObserver?
 
     private let container: ModelContainer
     private var saveObserver: NSObjectProtocol?
+    private var paceObserver: NSObjectProtocol?
     /// The titles Siri last learned, so they're only sent again after a
     /// change.
     private var shortcutTitles: [UUID: String]?
@@ -49,11 +51,27 @@ final class LibraryObserver {
                 Task { @MainActor in self.refresh() }
             }
         }
+        // A timing setting change, or a pace worked out, changes the time
+        // left. Posted on the main actor.
+        paceObserver = NotificationCenter.default.addObserver(
+            forName: ReadingPace.didChange,
+            object: ReadingPace.shared,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.refresh() }
+        }
     }
 
     private func refresh() {
         guard let documents = try? container.mainContext.fetch(FetchDescriptor<Document>()) else { return }
-        publish(ContinueReadingSnapshot(documents: documents))
+        let pace = ReadingPace.shared
+        // The snapshot's time left is plain until the up-next document's pace
+        // is known; working it out posts `didChange`, which refreshes again.
+        if let upNext = Document.upNext(in: documents) {
+            pace.prepare(upNext)
+        }
+        publish(ContinueReadingSnapshot(documents: documents, pace: pace))
         updateShortcutTitlesIfNeeded(for: documents)
     }
 

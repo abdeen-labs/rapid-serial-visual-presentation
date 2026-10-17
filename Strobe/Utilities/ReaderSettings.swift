@@ -82,7 +82,9 @@ enum ReaderSettings {
     nonisolated static let wpmStep: Double = 10
 
     /// The engine-relevant timing settings, read directly from UserDefaults.
-    struct TimingSnapshot {
+    /// Nonisolated so words can be timed off the main actor (see
+    /// ``ReadingPace``), and hashable and codable so it can key a cache.
+    nonisolated struct TimingSnapshot: Hashable, Codable, Sendable {
         let smartTimingEnabled: Bool
         let sentencePauseEnabled: Bool
         let smartTimingPercentPerLetter: Double
@@ -95,7 +97,8 @@ enum ReaderSettings {
         let sentenceBreakLength: Double
     }
 
-    /// Reads the current timing settings for constructing an ``RSVPEngine``.
+    /// Reads the current timing settings for constructing an ``RSVPEngine``
+    /// or estimating reading time.
     nonisolated static func timingSnapshot(from defaults: UserDefaults = .standard) -> TimingSnapshot {
         TimingSnapshot(
             smartTimingEnabled: defaults.object(forKey: Keys.smartTimingEnabled) as? Bool

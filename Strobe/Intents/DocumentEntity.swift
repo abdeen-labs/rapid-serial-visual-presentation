@@ -40,7 +40,10 @@ extension DocumentEntity {
     @MainActor
     init(document: Document) {
         let status = document.readingStatus
-        let timeLeft = ReadingTime.label(minutes: document.remainingMinutes)
+        // At the document's pace when it's known. Listing documents doesn't
+        // wait for any to be worked out.
+        let remainingMinutes = ReadingPace.shared.remainingMinutes(for: document)
+        let timeLeft = ReadingTime.label(minutes: remainingMinutes)
         id = document.id
         switch status {
         case .new:
@@ -58,7 +61,7 @@ extension DocumentEntity {
         }
         title = document.title
         percentRead = status.percent
-        minutesLeft = status == .finished ? 0 : document.remainingMinutes
+        minutesLeft = status == .finished ? 0 : remainingMinutes
     }
 }
 

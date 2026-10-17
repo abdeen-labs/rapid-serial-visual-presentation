@@ -152,7 +152,7 @@ nonisolated struct PunctuationMarks: OptionSet, Hashable, Sendable {
 
 /// Pause multipliers for every punctuation type except a sentence end, which
 /// keeps its own setting (`sentencePauseMultiplier`). 1.0 means no pause.
-nonisolated struct PunctuationPauses: Equatable, Sendable {
+nonisolated struct PunctuationPauses: Hashable, Codable, Sendable {
     var clause: Double = 1.3
     var dash: Double = 1.4
     var ellipsis: Double = 1.5

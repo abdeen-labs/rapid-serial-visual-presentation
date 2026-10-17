@@ -67,7 +67,10 @@ struct LibraryDisplayTests {
         )
         #expect(doc.kind == .epub)
         #expect(doc.remainingWordCount == 60)
-        #expect(doc.remainingMinutes == 1)
+        #expect(doc.remainingMinutes(paceFactor: nil) == 1)
+        // 60 words at 300 wpm, five times as long: still a minute.
+        #expect(doc.remainingMinutes(paceFactor: 5) == 1)
+        #expect(doc.remainingMinutes(paceFactor: 6) == 2)
         doc.currentWordIndex = 100
         #expect(doc.remainingWordCount == 0)
     }
