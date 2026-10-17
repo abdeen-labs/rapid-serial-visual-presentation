@@ -76,9 +76,12 @@ struct DocumentTile: View {
     }
 }
 
-/// Stands in the grid for a file that's still importing.
+/// Stands in the grid for a file that's still importing. When several are
+/// queued, it counts them: file `position` of `count`.
 struct ImportingTile: View {
     let fileName: String
+    var position = 1
+    var count = 1
     let onCancel: () -> Void
 
     var body: some View {
@@ -94,6 +97,12 @@ struct ImportingTile: View {
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .lineLimit(3)
+                        if count > 1 {
+                            Text("\(position) of \(count)")
+                                .font(StrobeTheme.metadataFont)
+                                .monospacedDigit()
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     .padding(12)
                 }
@@ -103,7 +112,9 @@ struct ImportingTile: View {
                         .strokeBorder(.white.opacity(0.07), lineWidth: 0.5)
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Importing \(fileName)")
+                .accessibilityLabel(count > 1
+                    ? "Importing \(fileName), \(position) of \(count)"
+                    : "Importing \(fileName)")
 
             HStack(spacing: 0) {
                 Text("Importing…")
@@ -114,7 +125,7 @@ struct ImportingTile: View {
                 Button("Cancel", action: onCancel)
                     .font(StrobeTheme.metadataFont.weight(.semibold))
                     .buttonStyle(.borderless)
-                    .accessibilityHint("Stops the import")
+                    .accessibilityHint(count > 1 ? "Stops this import and the files after it" : "Stops the import")
             }
         }
     }

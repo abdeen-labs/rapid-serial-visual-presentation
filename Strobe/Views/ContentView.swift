@@ -28,7 +28,8 @@ struct ContentView: View {
     @State private var isProcessingImport = false
     @State private var importFileName = ""
     @State private var importTask: Task<Void, Never>?
-    @State private var importError: String?
+    @State private var importQueue = ImportQueue()
+    @State private var importError: ImportQueue.Report?
     @State private var persistenceError: String?
     @State private var showSettings = false
     @State private var showWelcome = false
@@ -124,8 +125,7 @@ struct ContentView: View {
         }
         .focusedSceneValue(\.libraryActions, LibraryActions(
             importFile: { isImporting = true },
-            newText: { showTextInput = true },
-            canImportFile: !isProcessingImport
+            newText: { showTextInput = true }
         ))
         #if os(iOS)
         // On macOS, settings open in the standard Settings window (Cmd+,).
@@ -144,14 +144,14 @@ struct ContentView: View {
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: DocumentImportPipeline.supportedContentTypes,
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
             handleImport(result)
         }
-        .alert("Couldn't Import File", isPresented: .init(isPresent: $importError)) {
+        .alert(importError?.title ?? "Couldn't Import File", isPresented: .init(isPresent: $importError)) {
             Button("OK") { importError = nil }
         } message: {
-            Text(importError ?? "")
+            Text(importError?.message ?? "")
         }
         .alert("Save Error", isPresented: .init(isPresent: $persistenceError)) {
             Button("OK") { persistenceError = nil }
@@ -237,8 +237,8 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { StrobeTheme.background.ignoresSafeArea() }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-            guard let provider = providers.first else { return false }
-            handleDrop(provider)
+            guard !providers.isEmpty else { return false }
+            handleDrop(providers)
             return true
         }
         .overlay {
@@ -264,8 +264,12 @@ struct ContentView: View {
 
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 28) {
                     if isProcessingImport {
-                        ImportingTile(fileName: importFileName) {
-                            importTask?.cancel()
+                        ImportingTile(
+                            fileName: importFileName,
+                            position: importQueue.startedCount,
+                            count: importQueue.queuedCount
+                        ) {
+                            cancelImports()
                         }
                     }
                     ForEach(displayedDocuments) { document in
@@ -370,7 +374,6 @@ struct ContentView: View {
             } label: {
                 Label("Import File…", systemImage: "doc.badge.plus")
             }
-            .disabled(isProcessingImport)
             Button {
                 showTextInput = true
             } label: {
@@ -492,20 +495,38 @@ extension ContentView {
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            guard let url = urls.first else { return }
-            importDocument(from: url)
+            for url in urls {
+                importQueue.enqueue(.init(url: url, deleteAfterImport: false))
+            }
+            startNextImport()
         case .failure(let error):
-            importError = error.localizedDescription
+            importError = .init(message: error.localizedDescription)
         }
     }
 
-    /// Imports a dropped file via `loadInPlaceFileRepresentation`. The raw
-    /// `fileURL` item is unusable on iOS — it points into the source app's
-    /// sandbox with no security scope, so opening it fails with a misleading
+    /// Queues every dropped file as it loads, starting the first right away.
+    private func handleDrop(_ providers: [NSItemProvider]) {
+        let generation = importQueue.beginLoading(providers.count)
+        for provider in providers {
+            Self.loadDroppedFile(from: provider) { result in
+                Task { @MainActor in
+                    receiveDroppedFile(result, from: generation)
+                }
+            }
+        }
+    }
+
+    /// Loads a dropped file via `loadInPlaceFileRepresentation`, then hands
+    /// `completion` the file to import or why it can't be. The raw `fileURL`
+    /// item is unusable on iOS — it points into the source app's sandbox
+    /// with no security scope, so opening it fails with a misleading
     /// "corrupted file" error. The in-place/copied representation is
     /// readable; the system reclaims copies when the handler returns, so
     /// they're cloned out first.
-    private func handleDrop(_ provider: NSItemProvider) {
+    nonisolated private static func loadDroppedFile(
+        from provider: NSItemProvider,
+        completion: @escaping @Sendable (ImportQueue.DropResult) -> Void
+    ) {
         let supported = DocumentImportPipeline.supportedContentTypes
         let typeID = provider.registeredTypeIdentifiers.first { id in
             guard let type = UTType(id) else { return false }
@@ -513,61 +534,87 @@ extension ContentView {
         }
 
         guard let typeID else {
-            // Load the URL just to name the file in the error message.
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
-                let name = (data as? Data)
-                    .flatMap { String(data: $0, encoding: .utf8) }
-                    .flatMap(URL.init(string:))?
-                    .lastPathComponent
-                Task { @MainActor in
-                    if let name {
-                        importError = "\"\(name)\" isn't a supported file type. Drop a PDF, EPUB, or text file."
-                    } else {
-                        importError = "That file isn't a supported type. Drop a PDF, EPUB, or text file."
-                    }
-                }
+            // A Finder drag on macOS lists only the file's URL, never its
+            // type, so the type has to come from the file itself.
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                completion(Self.untypedDropResult(for: url))
             }
             return
         }
 
+        let suggestedName = provider.suggestedName
         _ = provider.loadInPlaceFileRepresentation(forTypeIdentifier: typeID) { url, inPlace, _ in
             guard let url else {
-                Task { @MainActor in
-                    importError = "Couldn't read the dropped file."
-                }
+                completion(.rejected(.unreadable(fileName: suggestedName)))
                 return
             }
             if inPlace {
-                Task { @MainActor in
-                    importDocument(from: url)
-                }
-            } else {
-                // The system deletes this copy when the handler returns —
-                // clone it to our own temp location first.
-                do {
-                    let dir = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("drop_\(UUID().uuidString)", isDirectory: true)
-                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                    let copy = dir.appendingPathComponent(url.lastPathComponent)
-                    try FileManager.default.copyItem(at: url, to: copy)
-                    Task { @MainActor in
-                        importDocument(from: copy, deleteAfterImport: true)
-                    }
-                } catch {
-                    Task { @MainActor in
-                        importError = "Couldn't read the dropped file."
-                    }
-                }
+                completion(.file(.init(url: url, deleteAfterImport: false)))
+                return
+            }
+            // The system deletes this copy when the handler returns —
+            // clone it to our own temp location first.
+            do {
+                let dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("drop_\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let copy = dir.appendingPathComponent(url.lastPathComponent)
+                try FileManager.default.copyItem(at: url, to: copy)
+                completion(.file(.init(url: copy, deleteAfterImport: true)))
+            } catch {
+                completion(.rejected(.unreadable(fileName: url.lastPathComponent)))
             }
         }
     }
 
-    private func importDocument(from url: URL, deleteAfterImport: Bool = false) {
-        guard !isProcessingImport else {
-            importError = "Another import is still in progress. Wait for it to finish or cancel it first."
+    /// A dropped file whose drag didn't list its type: imported if the file
+    /// is one Strobe reads. Only on macOS: there the drag grants access to
+    /// the URL itself, while on iOS it's unreadable and only names the file.
+    nonisolated private static func untypedDropResult(for url: URL?) -> ImportQueue.DropResult {
+        guard let url else { return .rejected(.unsupported(fileName: nil)) }
+        #if os(macOS)
+        let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+        if DocumentImportPipeline.resolveSourceType(for: url, detectedContentType: contentType) != .unknown {
+            return .file(.init(url: url, deleteAfterImport: false))
+        }
+        #endif
+        return .rejected(.unsupported(fileName: url.lastPathComponent))
+    }
+
+    private func receiveDroppedFile(_ result: ImportQueue.DropResult, from generation: Int) {
+        guard importQueue.receive(result, from: generation) else {
+            // Its batch was cancelled while it loaded.
+            if case .file(let item) = result, item.deleteAfterImport {
+                try? FileManager.default.removeItem(at: item.url)
+            }
             return
         }
+        startNextImport()
+    }
 
+    /// Starts the next waiting file unless one is importing. Once nothing is
+    /// left, reports the batch's failures in one alert.
+    private func startNextImport() {
+        guard !isProcessingImport else { return }
+        if let item = importQueue.next() {
+            importDocument(item)
+        } else if let report = importQueue.finishBatch() {
+            importError = report
+        }
+    }
+
+    /// The importing tile's Cancel: stops the running import and drops the
+    /// files waiting behind it.
+    private func cancelImports() {
+        for item in importQueue.cancel() where item.deleteAfterImport {
+            try? FileManager.default.removeItem(at: item.url)
+        }
+        importTask?.cancel()
+    }
+
+    private func importDocument(_ item: ImportQueue.Item) {
+        let url = item.url
+        let deleteAfterImport = item.deleteAfterImport
         let isSecurityScoped = url.startAccessingSecurityScopedResource()
 
         let bookmarkData: Data
@@ -597,6 +644,7 @@ extension ContentView {
                 isProcessingImport = false
                 importFileName = ""
                 importTask = nil
+                startNextImport()
             }
 
             do {
@@ -652,12 +700,8 @@ extension ContentView {
             } catch is CancellationError {
                 // User cancelled — no alert.
             } catch {
-                if let localizedError = error as? LocalizedError,
-                   let message = localizedError.errorDescription {
-                    importError = message
-                } else {
-                    importError = error.localizedDescription
-                }
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                importQueue.record(.failed(fileName: fileName, message: message))
             }
         }
     }
@@ -677,7 +721,7 @@ extension ContentView {
                 try modelContext.save()
             } catch {
                 // Leave the flag unset so the next launch retries.
-                importError = "Could not migrate document storage: \(error.localizedDescription)"
+                importError = .init(message: "Could not migrate document storage: \(error.localizedDescription)")
                 return
             }
         }

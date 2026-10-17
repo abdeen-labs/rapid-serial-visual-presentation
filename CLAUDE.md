@@ -31,7 +31,7 @@ PDF/EPUB/Text → DocumentImportPipeline → Extractor → TextCleaner → Token
 
 ### Key Layers
 
-**Import Pipeline** (`Import/`): `DocumentImportPipeline` detects file type via UTType, routes to `EPUBTextExtractor`, `PDFTextExtractor`, or a plain-text reader, then cleans and tokenizes. EPUB extraction uses `ZIPExtractor` → OPF parsing → DRM check (`META-INF/encryption.xml` vs. spine) → HTML stripping. Long phases check `Task.checkCancellation()` so the importing tile's Cancel works. Returns `ImportResult` with words, chapters, source type, and title.
+**Import Pipeline** (`Import/`): `DocumentImportPipeline` detects file type via UTType, routes to `EPUBTextExtractor`, `PDFTextExtractor`, or a plain-text reader, then cleans and tokenizes. EPUB extraction uses `ZIPExtractor` → OPF parsing → DRM check (`META-INF/encryption.xml` vs. spine) → HTML stripping. Long phases check `Task.checkCancellation()` so the importing tile's Cancel works. Returns `ImportResult` with words, chapters, source type, and title. `ContentView` imports every dropped or picked file, one after another, through `ImportQueue` (`Import/ImportQueue.swift`). The importing tile counts them ("3 of 21"), its Cancel also drops the files waiting, and a batch's failures come in one alert once nothing is left to import. A Finder drag on macOS lists only the file's URL, not its type, so the drop handler reads the type from the file itself.
 
 **Tokenizer** (`Engine/Tokenizer.swift`): Whitespace-based splitting with special handling for:
 - Soft hyphen removal, non-breaking hyphen normalization
@@ -103,7 +103,7 @@ Targets: `Strobe` (the app, which embeds both extensions), `StrobeTests`, `Strob
 Strobe/
 ├── App/          App entry point, SwiftData container bootstrap, File menu commands, strobe:// links (AppLink, AppRouter), LibraryObserver
 ├── Engine/       RSVPEngine (playback), Tokenizer (word splitting), WordComplexityAnalyzer, per-word classifiers (PunctuationPause, CompoundWord, Acronym, SentenceBreak, ChapterHeading), EnclosingMarks
-├── Import/       DocumentImportPipeline, extractors, TextCleaner, ZIPExtractor, TextImport, ShareInbox + ShareInboxImporter
+├── Import/       DocumentImportPipeline, extractors, TextCleaner, ZIPExtractor, TextImport, ImportQueue, ShareInbox + ShareInboxImporter
 ├── Intents/      App Intents: DocumentEntity and its query, the reading intents, StrobeShortcuts
 ├── Models/       SwiftData models (Document, Chapter, WordStorage, ComplexityStorage), library display helpers, ContinueReadingSnapshot, LikelyDuplicates (near-duplicate matching)
 ├── Views/        All SwiftUI views; Settings/ holds the settings sections

@@ -5,8 +5,6 @@ import SwiftUI
 struct LibraryActions {
     let importFile: () -> Void
     let newText: () -> Void
-    /// False while an import is running; the importer handles one file at a time.
-    let canImportFile: Bool
 }
 
 nonisolated private struct LibraryActionsKey: FocusedValueKey {
@@ -36,7 +34,7 @@ struct LibraryCommands: Commands {
                 actions?.importFile()
             }
             .keyboardShortcut("o")
-            .disabled(actions?.canImportFile != true)
+            .disabled(actions == nil)
         }
     }
 }
