@@ -817,6 +817,9 @@ struct ReaderView: View {
                     applyWPM(Int(wpmSliderValue), withHaptic: true)
                 }
             }
+            // The row above names it; macOS would show "Speed" again beside
+            // the slider.
+            .labelsHidden()
             .tint(.white)
             .frame(minHeight: 44)
             .accessibilityLabel("Speed")
