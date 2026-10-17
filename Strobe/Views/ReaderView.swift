@@ -49,6 +49,9 @@ struct ReaderView: View {
     /// Reading started by a second finger with Hold to Read on: it goes on
     /// with nothing touching the screen, until any pause.
     @State private var isHandsFree = false
+    /// Counts the times hands-free reading started, so its note shows once
+    /// for each start and never comes back for the same one.
+    @State private var handsFreeStarts = 0
     /// True while the reader's drag is under way. It resets however the
     /// drag finishes, but only a drag that ends normally reaches `onEnded`,
     /// so a reset while `isTouching` is still set means SwiftUI cancelled it.
@@ -216,10 +219,15 @@ struct ReaderView: View {
                                 .offset(y: CGFloat(fontSize) * 1.4)
                                 .accessibilityHidden(true)
                         }
-                        // Hidden while a finger is down: the touch is a hold
-                        // then, or the tap that stops reading.
+                        // Shown when hands-free reading starts. A finger
+                        // coming down (a hold, or the tap that stops reading)
+                        // or reading stopping puts it away for good.
                         .overlay {
-                            HandsFreeLabelView(engine: engine, isShown: isHandsFree && !isTouching)
+                            HandsFreeLabelView(
+                                engine: engine,
+                                start: handsFreeStarts,
+                                isDismissed: !isHandsFree || isTouching
+                            )
                                 .offset(y: CGFloat(fontSize) * 1.4)
                                 .accessibilityHidden(true)
                         }
@@ -598,6 +606,7 @@ struct ReaderView: View {
         // Nothing to read yet while the document loads.
         guard engine.isPlaying else { return }
         isHandsFree = true
+        handsFreeStarts += 1
         HapticManager.shared.playPause()
         #if os(iOS)
         AccessibilityNotification.Announcement("Reading hands-free. Tap to stop.").post()
@@ -1041,12 +1050,15 @@ private struct HoldSpeedReadoutView: View {
 }
 
 /// The note that reading has gone hands-free and how to stop it, so the
-/// two-finger touch explains itself. Fades out 2s after it's shown; hiding
-/// it fades it quickly. Steps aside for a chapter title, which it would run
-/// into. Isolates the announcement read.
+/// two-finger touch explains itself. Shows once when hands-free reading
+/// starts and fades out 2s later; dismissing it fades it quickly, and it
+/// doesn't return until the next start. Steps aside for a chapter title,
+/// which it would run into. Isolates the announcement read.
 private struct HandsFreeLabelView: View {
     let engine: RSVPEngine
-    let isShown: Bool
+    /// Changes each time hands-free reading starts; 0 before the first.
+    let start: Int
+    let isDismissed: Bool
     @State private var isVisible = false
 
     var body: some View {
@@ -1054,15 +1066,16 @@ private struct HandsFreeLabelView: View {
             .font(StrobeTheme.bodyFont(size: 14))
             .foregroundStyle(StrobeTheme.textSecondary)
             .opacity(isVisible && engine.chapterAnnouncement == nil ? 1 : 0)
-            .task(id: isShown) {
-                guard isShown else {
-                    withAnimation(.easeInOut(duration: 0.2)) { isVisible = false }
-                    return
-                }
+            .task(id: start) {
+                guard start > 0 else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { isVisible = true }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeOut(duration: 1)) { isVisible = false }
+            }
+            .onChange(of: isDismissed) { _, dismissed in
+                guard dismissed else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { isVisible = false }
             }
     }
 }
