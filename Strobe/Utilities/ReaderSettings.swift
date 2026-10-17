@@ -32,6 +32,8 @@ enum ReaderSettings {
         nonisolated static let sentenceBreakLength = "sentenceBreakLength"
         nonisolated static let contextWordsEnabled = "contextWordsEnabled"
         nonisolated static let enclosingMarksEnabled = "enclosingMarksEnabled"
+        nonisolated static let enclosingMarksSize = "enclosingMarksSize"
+        nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
         nonisolated static let iCloudSyncEnabled = "iCloudSyncEnabled"
 
         // App-level flags (not reader settings, but registered here so key
@@ -65,6 +67,11 @@ enum ReaderSettings {
         nonisolated static let sentenceBreakLength = 1.0
         nonisolated static let contextWordsEnabled = false
         nonisolated static let enclosingMarksEnabled = false
+        /// A multiple of the marks' standard size; see `EnclosingMarksLayout.sizeRange`.
+        nonisolated static let enclosingMarksSize = 1.0
+        /// A level from 0 to 1. This one is the tone's faded text; see
+        /// `EnclosingMarksLayout.opacity(level:tone:)`.
+        nonisolated static let enclosingMarksOpacity = 0.5
         nonisolated static let iCloudSyncEnabled = true
     }
 

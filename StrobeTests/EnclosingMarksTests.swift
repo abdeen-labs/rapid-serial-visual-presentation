@@ -290,6 +290,118 @@ struct EnclosingMarksTests {
         #expect(EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: minimumRoom - 0.5) == nil)
     }
 
+    // MARK: - Size setting
+
+    /// Across the size setting's range, ends included.
+    private static let sizeScales = Array(stride(
+        from: CGFloat(EnclosingMarksLayout.sizeRange.lowerBound),
+        through: CGFloat(EnclosingMarksLayout.sizeRange.upperBound),
+        by: 0.25
+    ))
+
+    /// The default draws the marks at the size they had before the setting.
+    @Test func defaultSizeIsTheStandardSize() throws {
+        for size in Self.textSizes {
+            let standard = max(EnclosingMarksLayout.preferredMinimumFontSize, size * EnclosingMarksLayout.fontSizeRatio)
+            let scale = CGFloat(ReaderSettings.Defaults.enclosingMarksSize)
+            #expect(EnclosingMarksLayout.preferredFontSize(wordFontSize: size, scale: scale) == standard, "size \(size)")
+            let metrics = try #require(EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: 1_000, scale: scale))
+            #expect(metrics.fontSize == standard, "size \(size)")
+        }
+    }
+
+    /// At every size the slot starts past the end of the word's guide line
+    /// and ends before the bar margin, however little room there is.
+    @Test func everySizeStaysAboveTheWordAndClearOfTheBars() {
+        for scale in Self.sizeScales {
+            for size in Self.textSizes {
+                for room in stride(from: CGFloat(0), through: 400, by: 5) {
+                    guard let metrics = EnclosingMarksLayout.metrics(
+                        wordFontSize: size, clearHalfHeight: room, scale: scale
+                    ) else { continue }
+                    let label = "scale \(scale), size \(size), room \(room)"
+                    let bottom = metrics.offset - metrics.slotHeight / 2
+                    #expect(bottom > size * WordView.guideLineHeightRatio / 2, "\(label)")
+                    #expect(metrics.reach <= room - EnclosingMarksLayout.barMargin + 0.001, "\(label)")
+                    #expect(metrics.fontSize >= EnclosingMarksLayout.minimumFontSize, "\(label)")
+                    #expect(metrics.fontSize <= EnclosingMarksLayout.preferredFontSize(wordFontSize: size, scale: scale) + 0.001,
+                            "\(label)")
+                }
+            }
+        }
+    }
+
+    /// The setting changes how big the marks are, never whether they show:
+    /// the smallest stops at the size they hide below, and the largest
+    /// shrinks to the room.
+    @Test func sizeNeverDecidesWhetherTheMarksShow() {
+        for scale in Self.sizeScales {
+            for size in Self.textSizes {
+                for room in stride(from: CGFloat(0), through: 400, by: 2.5) {
+                    let scaled = EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: room, scale: scale)
+                    let standard = EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: room)
+                    #expect((scaled != nil) == (standard != nil), "scale \(scale), size \(size), room \(room)")
+                }
+            }
+        }
+    }
+
+    @Test func largerSizesGrowUntilTheRoomCapsThem() throws {
+        let size: CGFloat = 40
+        let lowest = CGFloat(EnclosingMarksLayout.sizeRange.lowerBound)
+        let highest = CGFloat(EnclosingMarksLayout.sizeRange.upperBound)
+        let standard = try #require(EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: 1_000))
+        let smallest = try #require(EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: 1_000, scale: lowest))
+        let largest = try #require(EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: 1_000, scale: highest))
+        #expect(abs(smallest.fontSize - standard.fontSize * lowest) < 0.001)
+        #expect(abs(largest.fontSize - standard.fontSize * highest) < 0.001)
+
+        // Room for the standard size but not the largest: the largest fills it.
+        let room = standard.reach + EnclosingMarksLayout.barMargin + 10
+        let capped = try #require(EnclosingMarksLayout.metrics(wordFontSize: size, clearHalfHeight: room, scale: highest))
+        #expect(capped.fontSize > standard.fontSize)
+        #expect(capped.fontSize < largest.fontSize)
+        #expect(abs(capped.reach - (room - EnclosingMarksLayout.barMargin)) < 0.001)
+        // The slot grows upward only.
+        #expect(abs((capped.offset - capped.slotHeight / 2) - (standard.offset - standard.slotHeight / 2)) < 0.001)
+    }
+
+    /// At the smallest text size the standard size is already near the
+    /// floor, so the smallest setting stops there rather than hiding them.
+    @Test func smallestSizeStopsAtTheMinimum() throws {
+        let metrics = try #require(EnclosingMarksLayout.metrics(
+            wordFontSize: 24, clearHalfHeight: 1_000, scale: CGFloat(EnclosingMarksLayout.sizeRange.lowerBound)
+        ))
+        #expect(metrics.fontSize == EnclosingMarksLayout.minimumFontSize)
+    }
+
+    // MARK: - Opacity setting
+
+    /// The default draws the marks in each tone's faded text, as before the
+    /// setting.
+    @Test func defaultOpacityIsEachTonesFadedText() {
+        for tone in ReaderTextTone.allCases {
+            let opacity = EnclosingMarksLayout.opacity(level: ReaderSettings.Defaults.enclosingMarksOpacity, tone: tone)
+            #expect(opacity == tone.fadedTextOpacity, "\(tone.rawValue)")
+        }
+    }
+
+    /// From the tone's dim text, faint but visible, up to its full text
+    /// color, brightening at every step.
+    @Test func opacityRunsFromDimTextToTheFullTextColor() {
+        for tone in ReaderTextTone.allCases {
+            #expect(EnclosingMarksLayout.opacity(level: 0, tone: tone) == tone.dimTextOpacity, "\(tone.rawValue)")
+            #expect(EnclosingMarksLayout.opacity(level: 1, tone: tone) == 1, "\(tone.rawValue)")
+            #expect(EnclosingMarksLayout.opacity(level: -1, tone: tone) == tone.dimTextOpacity, "\(tone.rawValue)")
+            #expect(EnclosingMarksLayout.opacity(level: 2, tone: tone) == 1, "\(tone.rawValue)")
+
+            let opacities = stride(from: 0.0, through: 1.0, by: 0.05).map {
+                EnclosingMarksLayout.opacity(level: $0, tone: tone)
+            }
+            #expect(zip(opacities, opacities.dropFirst()).allSatisfy { $0 < $1 }, "\(tone.rawValue)")
+        }
+    }
+
     // Measured reader chrome, as in ReaderLayoutTests.
     private static let topBar: CGFloat = 140
     private static let bottomBarWithChapters: CGFloat = 166
@@ -413,8 +525,10 @@ struct EnclosingMarksTests {
         let bytes: [UInt8]
     }
 
-    private static func isolatedDefaults() throws -> UserDefaults {
-        let suiteName = "EnclosingMarksTests.render"
+    /// A cleared defaults suite. A test that stores settings in it takes a
+    /// `name` of its own, so tests running alongside never render them.
+    private static func isolatedDefaults(_ name: String = "render") throws -> UserDefaults {
+        let suiteName = "EnclosingMarksTests.\(name)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
@@ -440,9 +554,9 @@ struct EnclosingMarksTests {
         return Bitmap(width: width, height: height, bytes: bytes)
     }
 
-    /// The pixel rows of the marks' slot, or nil when there is no room for
-    /// one, measured from the top of the screen.
-    private static func slotRows(_ screen: Screen, fontSize: CGFloat) -> ClosedRange<Int>? {
+    /// The pixel rows of the marks' slot at the size setting `sizeScale`, or
+    /// nil when there is no room for one, measured from the top of the screen.
+    private static func slotRows(_ screen: Screen, fontSize: CGFloat, sizeScale: CGFloat = 1) -> ClosedRange<Int>? {
         let center = ReaderStageLayout.fixationCenterY(
             boundsHeight: screen.stageHeight, topInset: screen.topInset, bottomInset: screen.bottomInset,
             contentHeight: wordSlotHeight(fontSize: fontSize),
@@ -452,7 +566,7 @@ struct EnclosingMarksTests {
             centerY: center, boundsHeight: screen.stageHeight,
             topBarHeight: topBar, bottomBarHeight: bottomBarWithChapters
         )
-        guard let metrics = EnclosingMarksLayout.metrics(wordFontSize: fontSize, clearHalfHeight: room) else {
+        guard let metrics = EnclosingMarksLayout.metrics(wordFontSize: fontSize, clearHalfHeight: room, scale: sizeScale) else {
             return nil
         }
         let middle = screen.topInset + center - metrics.offset
@@ -545,10 +659,28 @@ struct EnclosingMarksTests {
         }
     }
 
-    /// Yields between cases, like the test above.
     @MainActor
     @Test func visibleMarksOnlyChangePixelsInsideTheirSlot() async throws {
         let defaults = try Self.isolatedDefaults()
+        try await Self.expectMarksOnlyChangePixelsInsideTheirSlot(defaults: defaults, sizeScale: 1)
+    }
+
+    /// The largest marks, at full opacity, keep to their slot too: it grows
+    /// into the room above the word and no further.
+    @MainActor
+    @Test func largestMarksOnlyChangePixelsInsideTheirSlot() async throws {
+        let largest = EnclosingMarksLayout.sizeRange.upperBound
+        let defaults = try Self.isolatedDefaults("largest")
+        defaults.set(largest, forKey: ReaderSettings.Keys.enclosingMarksSize)
+        defaults.set(1.0, forKey: ReaderSettings.Keys.enclosingMarksOpacity)
+        try await Self.expectMarksOnlyChangePixelsInsideTheirSlot(defaults: defaults, sizeScale: CGFloat(largest))
+    }
+
+    /// Renders each case with and without the marks, from `defaults`, whose
+    /// size setting is `sizeScale`. Yields between cases, like
+    /// `wordPixelsMatchWithMarksAbsentDisabledOrInvisible`.
+    @MainActor
+    private static func expectMarksOnlyChangePixelsInsideTheirSlot(defaults: UserDefaults, sizeScale: CGFloat) async throws {
         for screen in [Screen.phone, .smallWindow] {
             for fontSize: CGFloat in [24, 40, 72] {
                 for sample in Self.cases {
@@ -562,8 +694,8 @@ struct EnclosingMarksTests {
                     let absent = try Self.render(stage(.absent))
                     let visible = try Self.render(stage(.visible))
                     let changed = Self.changedPixelsByRow(absent, visible)
-                    let label = "\(screen.width)pt, \(fontSize)pt, \(sample.word)"
-                    guard let slot = Self.slotRows(screen, fontSize: fontSize) else {
+                    let label = "\(screen.width)pt, \(fontSize)pt, \(sample.word), \(sizeScale)x"
+                    guard let slot = Self.slotRows(screen, fontSize: fontSize, sizeScale: sizeScale) else {
                         #expect(Self.matches(absent, visible), "\(label): marks drew without room")
                         continue
                     }

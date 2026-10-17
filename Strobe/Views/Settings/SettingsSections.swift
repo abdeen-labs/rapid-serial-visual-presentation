@@ -334,6 +334,24 @@ struct WhileReadingSections: View {
     @AppStorage(ReaderSettings.Keys.readingHeaderChapterEnabled) private var readingHeaderChapterEnabled: Bool = ReaderSettings.Defaults.readingHeaderChapterEnabled
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
+    @AppStorage(ReaderSettings.Keys.enclosingMarksSize) private var enclosingMarksSize: Double = ReaderSettings.Defaults.enclosingMarksSize
+    @AppStorage(ReaderSettings.Keys.enclosingMarksOpacity) private var enclosingMarksOpacity: Double = ReaderSettings.Defaults.enclosingMarksOpacity
+    @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
+
+    private var enclosingMarksSizePercent: Int {
+        Int((enclosingMarksSize * 100).rounded())
+    }
+
+    /// The marks' opacity in the current tone. The setting's default lands
+    /// on each tone's own faded opacity, so the same level reads differently
+    /// from tone to tone.
+    private var enclosingMarksOpacityPercent: Int {
+        let opacity = EnclosingMarksLayout.opacity(
+            level: enclosingMarksOpacity,
+            tone: ReaderTextTone.resolve(readerTextToneSelection)
+        )
+        return Int((opacity * 100).rounded())
+    }
 
     var body: some View {
         Section {
@@ -354,12 +372,39 @@ struct WhileReadingSections: View {
                 Text("Previous and Next Words")
                 Text("Beside the word, readable only while paused")
             }
-            Toggle(isOn: $enclosingMarksEnabled) {
+            Toggle(isOn: $enclosingMarksEnabled.animation()) {
                 Text("Open Quotes and Parentheses")
-                Text("Faintly above the word until they close")
+                Text("Above the word until they close")
+            }
+            if enclosingMarksEnabled {
+                EnclosingMarksPreview()
+                SettingsSliderRow(
+                    value: "\(enclosingMarksSizePercent)%",
+                    accessibilityLabel: "Quote and parenthesis size",
+                    accessibilityValue: "\(enclosingMarksSizePercent) percent",
+                    sliderValue: $enclosingMarksSize,
+                    in: EnclosingMarksLayout.sizeRange,
+                    step: 0.1
+                ) {
+                    Text("Size")
+                }
+                SettingsSliderRow(
+                    value: "\(enclosingMarksOpacityPercent)%",
+                    accessibilityLabel: "Quote and parenthesis opacity",
+                    accessibilityValue: "\(enclosingMarksOpacityPercent) percent",
+                    sliderValue: $enclosingMarksOpacity,
+                    in: 0...1,
+                    step: 0.05
+                ) {
+                    Text("Opacity")
+                }
             }
         } header: {
             Text("Around the Word")
+        } footer: {
+            if enclosingMarksEnabled {
+                Text("Large marks shrink where there isn't room for them above the word.")
+            }
         }
     }
 }
