@@ -42,6 +42,14 @@ enum ReaderSettings {
         nonisolated static let didCompactLegacyWordStorage = "didCompactLegacyWordStorage"
         /// Set when sync turned itself off because Strobe's iCloud data was deleted.
         nonisolated static let iCloudSyncStoppedAfterDeletion = "iCloudSyncStoppedAfterDeletion"
+        /// Set when sync turned itself off because a different iCloud account
+        /// signed in than the one the library synced with.
+        nonisolated static let iCloudSyncStoppedForNewAccount = "iCloudSyncStoppedForNewAccount"
+        /// A question about sync waiting for an answer: a `SyncPrompt` raw value.
+        nonisolated static let iCloudSyncPrompt = "iCloudSyncPrompt"
+        /// Likely duplicates the user chose to keep on this device: a
+        /// `KeptLikelyDuplicates` raw value.
+        nonisolated static let keptLikelyDuplicates = "keptLikelyDuplicates"
     }
 
     enum Defaults {
@@ -72,7 +80,10 @@ enum ReaderSettings {
         /// A level from 0 to 1. This one is the tone's faded text; see
         /// `EnclosingMarksLayout.opacity(level:tone:)`.
         nonisolated static let enclosingMarksOpacity = 0.5
-        nonisolated static let iCloudSyncEnabled = true
+        /// Off, so nothing syncs without a stored yes. Launch stores the
+        /// real starting choice once: on for a fresh install, off and asked
+        /// for anyone who used Strobe before (`SyncConsent.storeLaunchChoice`).
+        nonisolated static let iCloudSyncEnabled = false
     }
 
     /// Shared words-per-minute domain: the reader slider, the settings slider,

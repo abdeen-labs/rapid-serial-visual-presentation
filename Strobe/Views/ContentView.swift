@@ -9,7 +9,9 @@ internal import UniformTypeIdentifiers
 /// Also the navigation root. It registers the reader and chapter list
 /// destinations and owns importing (the file picker, drag and drop, and the
 /// File menu commands), plain-text entry, and legacy word storage migration.
-/// It asks for an App Store rating when ``ReviewPrompt`` says one is due.
+/// It asks for an App Store rating when ``ReviewPrompt`` says one is due,
+/// asks about iCloud sync when a ``SyncPrompt`` is waiting, and offers to
+/// merge books that may be in the library twice (``LikelyDuplicates``).
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -37,6 +39,7 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var isDropTargeted = false
     @State private var navigationPath = NavigationPath()
+    @State private var isReviewingDuplicates = false
 
     private var columns: [GridItem] {
         #if os(macOS)
@@ -78,6 +81,15 @@ struct ContentView: View {
     private var continueReadingDocument: Document? {
         guard trimmedSearchText.isEmpty, documents.count > 1 else { return nil }
         return Document.mostRecentlyRead(in: documents)
+    }
+
+    /// Whether a waiting sync question can be asked: after the welcome, on
+    /// the library itself (never over the reader), with nothing else up.
+    private var canAskAboutSync: Bool {
+        hasSeenTutorial && !showWelcome && !showSettings && !showTextInput && !isImporting
+            && !isReviewingDuplicates && navigationPath.isEmpty
+            && documentPendingRename == nil && documentPendingDeletion == nil
+            && importError == nil && persistenceError == nil
     }
 
     var body: some View {
@@ -122,8 +134,12 @@ struct ContentView: View {
         }
         #endif
         .welcomeSheet(isPresented: $showWelcome)
+        .syncPrompt(canAsk: canAskAboutSync)
         .sheet(isPresented: $showTextInput) {
             TextInputView()
+        }
+        .sheet(isPresented: $isReviewingDuplicates) {
+            LikelyDuplicatesReview()
         }
         .fileImporter(
             isPresented: $isImporting,
@@ -238,6 +254,12 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 28) {
                 if let document = continueReadingDocument {
                     ContinueReadingCard(document: document)
+                }
+
+                if trimmedSearchText.isEmpty {
+                    LikelyDuplicatesNotice(documents: documents) {
+                        isReviewingDuplicates = true
+                    }
                 }
 
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 28) {

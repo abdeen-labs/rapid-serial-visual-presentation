@@ -26,6 +26,13 @@ struct StrobeApp: App {
         shareInboxImporter = container.map { ShareInboxImporter(container: $0) }
         if let container {
             LibraryObserver.start(container: container)
+            // Before sync starts, which reads the choice.
+            SyncConsent.storeLaunchChoice(hasDocuments: {
+                // A library that can't be counted counts as one, so sync
+                // waits for a yes.
+                guard let count = try? container.mainContext.fetchCount(FetchDescriptor<Document>()) else { return true }
+                return count > 0
+            })
             // Started here rather than from a view so iCloud sync also runs
             // when the system launches the app in the background.
             LibrarySync.shared.start(container: container)

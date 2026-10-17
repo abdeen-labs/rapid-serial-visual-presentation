@@ -3,15 +3,29 @@ import SwiftUI
 /// iCloud sync on or off, and what it's doing.
 struct SyncSettingsSection: View {
     @AppStorage(ReaderSettings.Keys.iCloudSyncEnabled) private var iCloudSyncEnabled = ReaderSettings.Defaults.iCloudSyncEnabled
+    @AppStorage(ReaderSettings.Keys.iCloudSyncPrompt) private var pendingSyncPrompt: SyncPrompt?
     private let sync = LibrarySync.shared
     #if DEBUG
     @State private var isCreatingSchema = false
     @State private var schemaResult: String?
     #endif
 
+    /// Turning sync on or off here also answers a sync question waiting in
+    /// the library. Only the user's own changes go through this; sync
+    /// turning itself off doesn't clear the question it just asked.
+    private var syncEnabled: Binding<Bool> {
+        Binding(
+            get: { iCloudSyncEnabled },
+            set: {
+                pendingSyncPrompt = nil
+                iCloudSyncEnabled = $0
+            }
+        )
+    }
+
     var body: some View {
         Section {
-            Toggle(isOn: $iCloudSyncEnabled) {
+            Toggle(isOn: syncEnabled) {
                 Text("iCloud Sync")
                 Text("Your library and reading positions on all your devices")
             }
@@ -61,6 +75,8 @@ struct SyncSettingsSection: View {
             "Books and reading positions stay on this device."
         case .offAfterICloudDeletion:
             "Strobe's data was deleted from iCloud, so sync turned off. Your library is still on this device. Turn sync on to upload it again."
+        case .offForNewAccount:
+            "This device is signed in to a different iCloud account than the one your library synced with, so sync turned off. Your library is still on this device. Turn sync on to sync it with this account."
         case .unavailable:
             "iCloud sync isn't available in this build."
         case .signedOut:
@@ -70,7 +86,7 @@ struct SyncSettingsSection: View {
         case .temporarilyUnavailable:
             "iCloud isn't available right now. Changes will sync when it's back."
         case .storageFull:
-            "Your iCloud storage is full, so new changes aren't syncing."
+            "Your iCloud storage is full, so new books aren't uploading."
         case .syncing:
             "Syncing…"
         case .upToDate:

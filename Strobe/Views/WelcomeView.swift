@@ -112,7 +112,8 @@ struct WelcomeView: View {
     }
 }
 
-private struct WelcomeFeature: Identifiable {
+/// A row on the welcome screen, and on the sync prompt that's modeled on it.
+struct WelcomeFeature: Identifiable {
     let symbol: String
     let title: String
     let detail: String
@@ -120,7 +121,7 @@ private struct WelcomeFeature: Identifiable {
     var id: String { symbol }
 }
 
-private struct WelcomeFeatureRow: View {
+struct WelcomeFeatureRow: View {
     let feature: WelcomeFeature
 
     var body: some View {

@@ -38,6 +38,9 @@ final class LibrarySync: CKSyncEngineDelegate {
         case off
         /// Turned off because Strobe's data was deleted from iCloud.
         case offAfterICloudDeletion
+        /// Turned off because a different iCloud account signed in than the
+        /// one the library synced with. Turning sync on agrees to sync with it.
+        case offForNewAccount
         /// Not available in this process (tests and previews).
         case unavailable
         case signedOut
@@ -50,12 +53,16 @@ final class LibrarySync: CKSyncEngineDelegate {
 
     private(set) var isEnabled = false
     private(set) var stoppedAfterICloudDeletion = false
+    private(set) var stoppedForNewAccount = false
     private(set) var accountStatus: CKAccountStatus?
     private(set) var isStorageFull = false
     private var activeOperations = 0
 
     var status: Status {
-        guard isEnabled else { return stoppedAfterICloudDeletion ? .offAfterICloudDeletion : .off }
+        guard isEnabled else {
+            if stoppedForNewAccount { return .offForNewAccount }
+            return stoppedAfterICloudDeletion ? .offAfterICloudDeletion : .off
+        }
         guard Self.isCloudKitAvailable else { return .unavailable }
         switch accountStatus {
         case .noAccount: return .signedOut
@@ -70,16 +77,30 @@ final class LibrarySync: CKSyncEngineDelegate {
     @ObservationIgnored private var container: ModelContainer?
     @ObservationIgnored private var cloudContainer: CKContainer?
     @ObservationIgnored private var engine: CKSyncEngine?
+    /// The engine whose account `checkAccount` has already checked.
+    @ObservationIgnored private weak var accountCheckedEngine: CKSyncEngine?
+    /// The engine for which the signed-in account is known to be one this
+    /// library may sync with (`accountIsSignedIn` went ahead). Until then
+    /// nothing is queued, so a ledger that outlived its engine state can't
+    /// send its saves or deletions to an account nobody agreed to.
+    @ObservationIgnored private weak var accountConfirmedEngine: CKSyncEngine?
     @ObservationIgnored private var ledger = CloudSyncLedger()
     @ObservationIgnored private var openDocuments: [UUID: Int] = [:]
     @ObservationIgnored private var recentlyClosed: [UUID: Date] = [:]
     /// Records not to send again before a time, after a failure that
     /// retrying right away wouldn't fix. Keyed by record name.
     @ObservationIgnored private var heldRecords: [String: Date] = [:]
-    /// No saves before this time, after iCloud reported the storage full.
-    @ObservationIgnored private var storageFullUntil: Date?
+    /// Whether books skipped by an earlier fetch are being fetched again.
+    @ObservationIgnored private var isRefetchingSkippedBooks = false
+    /// Books whose refetched records `applyRefetchedBooks` is taking in.
+    @ObservationIgnored private var refetchingBooks: Set<UUID> = []
     @ObservationIgnored private var lastFetchRequest = Date.distantPast
     @ObservationIgnored private var isReconcileScheduled = false
+    /// The app is quitting, so a reconcile scheduled now would never run.
+    @ObservationIgnored private var isTerminating = false
+    /// The engine under which a reconcile last saw the library. While it's
+    /// the current engine, every save since has been reconciled right away.
+    @ObservationIgnored private weak var watchingEngine: CKSyncEngine?
     @ObservationIgnored private var didRefetchAfterSaveFailure = false
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
@@ -96,6 +117,9 @@ final class LibrarySync: CKSyncEngineDelegate {
     /// write every book's words out for upload at once.
     private static let maxRecordsPerBatch = 200
     private static let maxAssetBytesPerBatch = 40_000_000
+    /// Skipped books fetched again per request. Each brings its words, and
+    /// a request's are all held at once.
+    private static let maxBooksPerRefetch = 20
 
     /// Test hosts and previews run without the app's iCloud entitlement, and
     /// creating a `CKContainer` there crashes.
@@ -113,15 +137,34 @@ final class LibrarySync: CKSyncEngineDelegate {
     func start(container: ModelContainer) {
         guard self.container == nil else { return }
         self.container = container
+        // On the posting thread: a main-context save made while the app quits
+        // must be reconciled before the save returns, not on a later pass of
+        // the main queue.
         observers.append(NotificationCenter.default.addObserver(
-            forName: ModelContext.didSave, object: nil, queue: .main
+            forName: ModelContext.didSave, object: nil, queue: nil
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.scheduleReconcile() }
+            guard let self else { return }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self.scheduleReconcile() }
+            } else {
+                Task { @MainActor in self.scheduleReconcile() }
+            }
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: .CKAccountChanged, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshAccountStatus() }
+        })
+        #if os(iOS)
+        let willTerminate = UIApplication.willTerminateNotification
+        #elseif os(macOS)
+        let willTerminate = NSApplication.willTerminateNotification
+        #endif
+        // Posted on the main thread; the app exits once observers return.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: willTerminate, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appWillTerminate() }
         })
         // After launch finishes: starting reads the ledger and the library.
         Task { updateEnabled() }
@@ -133,11 +176,18 @@ final class LibrarySync: CKSyncEngineDelegate {
         isEnabled = defaults.object(forKey: ReaderSettings.Keys.iCloudSyncEnabled) as? Bool
             ?? ReaderSettings.Defaults.iCloudSyncEnabled
         stoppedAfterICloudDeletion = defaults.bool(forKey: ReaderSettings.Keys.iCloudSyncStoppedAfterDeletion)
+        stoppedForNewAccount = defaults.bool(forKey: ReaderSettings.Keys.iCloudSyncStoppedForNewAccount)
         guard container != nil, Self.isCloudKitAvailable else { return }
         if isEnabled {
             if stoppedAfterICloudDeletion {
                 defaults.set(false, forKey: ReaderSettings.Keys.iCloudSyncStoppedAfterDeletion)
                 stoppedAfterICloudDeletion = false
+            }
+            if stoppedForNewAccount {
+                // Turned back on by the user: that agrees to the account the
+                // ledger asked about (see `accountIsSignedIn`).
+                defaults.set(false, forKey: ReaderSettings.Keys.iCloudSyncStoppedForNewAccount)
+                stoppedForNewAccount = false
             }
             if engine == nil { startEngine() }
         } else if engine != nil {
@@ -238,7 +288,12 @@ final class LibrarySync: CKSyncEngineDelegate {
         self.engine = engine
         activeOperations = 0
         heldRecords = [:]
-        storageFullUntil = nil
+        // A storage pause outlasts relaunches: uploads go on waiting for it,
+        // and Settings still says the storage is full.
+        isStorageFull = ledger.storagePause != nil
+        if let pause = ledger.storagePause {
+            resumeAfterStoragePause(at: pause.until)
+        }
         refreshAccountStatus()
         reconcile()
         registerForRemoteNotifications()
@@ -283,6 +338,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         // account signed in.)
         if engine === self.engine {
             finishFirstFetchIfNeeded()
+            refetchSkippedBooks(on: engine)
         }
     }
 
@@ -292,14 +348,15 @@ final class LibrarySync: CKSyncEngineDelegate {
 
     /// Forgets the ledger if it describes a different SwiftData store: a
     /// reset or replaced library must not read as every book deleted. The
-    /// library then merges with iCloud as if syncing for the first time.
+    /// library then merges with iCloud as if syncing for the first time,
+    /// with the account it synced with.
     private func checkStoreIdentity() {
         guard let url = container?.configurations.first?.url,
               let metadata = try? NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url),
               let identifier = metadata[NSStoreUUIDKey] as? String else { return }
         if let known = ledger.storeIdentifier, known != identifier {
             logger.notice("The library store changed; syncing it as a new library")
-            ledger = CloudSyncLedger()
+            ledger = ledger.startingOver()
         }
         ledger.storeIdentifier = identifier
     }
@@ -312,7 +369,7 @@ final class LibrarySync: CKSyncEngineDelegate {
               let documents = try? context.fetch(FetchDescriptor<Document>()) else { return }
         if ledger.hasLostTrack(ofLibraryWith: Set(documents.map(\.id))) {
             logger.notice("Many synced documents are missing; syncing the library as new instead of deleting them")
-            ledger = CloudSyncLedger(storeIdentifier: ledger.storeIdentifier)
+            ledger = ledger.startingOver()
         }
     }
 
@@ -321,8 +378,31 @@ final class LibrarySync: CKSyncEngineDelegate {
         Task {
             do {
                 accountStatus = try await cloudContainer.accountStatus()
+                if accountStatus == .available { checkAccount() }
             } catch {
                 logger.info("Couldn't read the iCloud account status: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Asks CloudKit which account is signed in, once per engine, and checks
+    /// it the way the engine's own sign-in events are checked. This covers a
+    /// ledger from before sync recorded its account, and one that outlived
+    /// the engine state that would have reported a switch (a refetch or a
+    /// store check starts the engine without one).
+    private func checkAccount() {
+        guard let engine, let cloudContainer, accountCheckedEngine !== engine else { return }
+        accountCheckedEngine = engine
+        Task {
+            do {
+                let userRecordID = try await cloudContainer.userRecordID()
+                // Restarted or stopped meanwhile; a new engine checks again.
+                guard engine === self.engine else { return }
+                accountIsSignedIn(userRecordID.recordName)
+            } catch {
+                // Tried again the next time the account reads as available.
+                if accountCheckedEngine === engine { accountCheckedEngine = nil }
+                log("Couldn't read the iCloud user", error)
             }
         }
     }
@@ -349,12 +429,39 @@ final class LibrarySync: CKSyncEngineDelegate {
     // MARK: - Local changes
 
     private func scheduleReconcile() {
+        // Quitting: a task scheduled now would never run.
+        if isTerminating {
+            reconcile()
+            return
+        }
         guard engine != nil, !isReconcileScheduled else { return }
         isReconcileScheduled = true
         Task {
             isReconcileScheduled = false
             reconcile()
         }
+    }
+
+    /// The app is about to quit. The reader saves its position on the way
+    /// out, before or after this (observers aren't ordered), so the library
+    /// is reconciled now and again after every save from here on. That puts
+    /// the position in the ledger, stamped with when it was set, before the
+    /// app exits. The engine's own state may not be saved in time, but the
+    /// next launch's reconcile queues the change again from the ledger.
+    private func appWillTerminate() {
+        isTerminating = true
+        reconcile()
+    }
+
+    /// The earliest a local change the ledger hasn't seen could have been
+    /// made, which dates it (see `CloudSyncLedger.stamped`). Once a reconcile
+    /// under the current engine has seen the library, every save is
+    /// reconciled right away, so such a change was made just now. Until then
+    /// it may be from any time since the last reconcile: made while sync was
+    /// off, or saved just before the app quit or crashed.
+    private func unseenChangesSince(_ now: Date) -> Date? {
+        if let engine, engine === watchingEngine { return now }
+        return ledger.lastReconciledAt
     }
 
     /// Queues whatever changed in the library since iCloud last confirmed it.
@@ -365,10 +472,16 @@ final class LibrarySync: CKSyncEngineDelegate {
             documents = try context.fetch(FetchDescriptor<Document>())
         } catch {
             logger.error("Couldn't read the library to sync: \(error.localizedDescription, privacy: .public)")
+            // What was saved since the last reconcile is still unseen.
+            watchingEngine = nil
             return
         }
         let now = Date.now
-        let plan = ledger.reconcile(documents.map { snapshot(of: $0, now: now) }, now: now)
+        let unseenSince = unseenChangesSince(now)
+        // Put back if the store can't save the documents this removes: a
+        // document the ledger forgot would upload again as a new book.
+        let ledgerBefore = ledger
+        let plan = ledger.reconcile(documents.map { snapshot(of: $0, now: now) }, now: now, unseenSince: unseenSince)
         if !plan.removals.isEmpty || !plan.positionUpdates.isEmpty {
             let byID = Dictionary(documents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for (id, position) in plan.positionUpdates {
@@ -377,8 +490,15 @@ final class LibrarySync: CKSyncEngineDelegate {
             for id in plan.removals {
                 if let document = byID[id] { context.delete(document) }
             }
-            saveContext(context)
+            guard saveContext(context) else {
+                // The documents stay, and leave at a later reconcile. Until
+                // one succeeds, what it saw counts as unseen.
+                ledger = ledgerBefore
+                watchingEngine = nil
+                return
+            }
         }
+        watchingEngine = engine
         enqueue(saves: plan.saves, deletes: plan.deletes, on: engine)
         saveLedger()
     }
@@ -394,12 +514,16 @@ final class LibrarySync: CKSyncEngineDelegate {
     }
 
     private func enqueue(saves: [CloudRecordKey], deletes: [CloudRecordKey], on engine: CKSyncEngine) {
+        // Nothing is sent before the account is known to be the right one;
+        // the reconcile that follows confirming it queues what waited.
+        guard accountConfirmedEngine === engine else { return }
         let now = Date.now
-        // Nothing uploads until a full fetch has shown what iCloud has, or
-        // while iCloud storage is full.
-        let canSave = ledger.hasFetchedEverything && (storageFullUntil.map { $0 <= now } ?? true)
+        // Nothing uploads until a full fetch has shown what iCloud has.
+        // While iCloud storage is full, first uploads wait; see
+        // `CloudSyncLedger.holdsSave`.
+        let canSave = ledger.hasFetchedEverything
         let sendableSaves = canSave
-            ? saves.filter { (heldRecords[$0.recordName] ?? .distantPast) <= now }
+            ? saves.filter { (heldRecords[$0.recordName] ?? .distantPast) <= now && !ledger.holdsSave($0, now: now) }
             : []
         var pending = Set(engine.state.pendingRecordZoneChanges.compactMap(Self.identity(of:)))
         let changes = sendableSaves.map { CKSyncEngine.PendingRecordZoneChange.saveRecord($0.recordID) }
@@ -485,7 +609,9 @@ final class LibrarySync: CKSyncEngineDelegate {
     /// After the first full fetch: local copies never uploaded, of books
     /// iCloud already has, fold into those books rather than uploading a
     /// second copy. This is what merges a book imported on two devices
-    /// before they synced. Only copies iCloud has never had are removed.
+    /// before they synced. Only copies iCloud has never had are removed;
+    /// nothing has been sent yet, so no upload can be on its way. Copies
+    /// that both reached iCloud are left to `CloudSyncLedger.markDuplicates`.
     private func mergeUnsentCopies() {
         guard let context = container?.mainContext,
               let documents = try? context.fetch(FetchDescriptor<Document>()) else { return }
@@ -497,6 +623,47 @@ final class LibrarySync: CKSyncEngineDelegate {
                 ledger.markMerged(document.id, into: keeper.id)
             }
         }
+    }
+
+    // MARK: - Likely duplicates
+
+    /// Whether the library may be checked for likely duplicates
+    /// (`LikelyDuplicates`), which needs what sync knows about each copy:
+    /// sync is running with an account it may sync with, and a full fetch
+    /// has shown what iCloud has, so a first sync settles before anything
+    /// is offered. Reads `status`, so a view that asks looks again each time
+    /// a fetch or send starts or finishes.
+    var isReadyForDuplicateReview: Bool {
+        switch status {
+        case .syncing, .upToDate, .storageFull:
+            guard let engine, accountConfirmedEngine === engine else { return false }
+            return ledger.hasFetchedEverything
+        default:
+            return false
+        }
+    }
+
+    /// Where a document came from, as `LikelyDuplicates` counts it; nil
+    /// when sync doesn't know (see `CloudSyncLedger.Entry.origin`). One
+    /// without an entry yet was imported here, as `CloudSyncLedger.reconcile`
+    /// counts it.
+    func origin(ofDocument id: UUID) -> CloudSyncLedger.Entry.Origin? {
+        guard let entry = ledger.entry(for: id) else { return .importedHere }
+        return entry.origin
+    }
+
+    /// Whether a document is on its way out of the library: merged into an
+    /// identical copy, a duplicate, or deleted on another device, so it
+    /// leaves once nothing shows it; or its deletion is on its way to iCloud.
+    func isLeavingLibrary(_ id: UUID) -> Bool {
+        ledger.entry(for: id)?.removal != nil || ledger.isPendingDelete(id)
+    }
+
+    /// Whether two documents have the same words: the same word count and
+    /// content hash. A hash the ledger doesn't have is worked out from the
+    /// words and kept, so words are only read for documents of equal length.
+    func haveSameWords(_ a: Document, _ b: Document) -> Bool {
+        a.wordCount == b.wordCount && contentHash(of: a) == contentHash(of: b)
     }
 
     #if DEBUG
@@ -542,8 +709,10 @@ final class LibrarySync: CKSyncEngineDelegate {
         case .accountChange(let change):
             handleAccountChange(change)
         case .fetchedDatabaseChanges(let changes):
+            guard await mayTakeInChanges(from: syncEngine) else { return }
             handleZoneDeletions(changes.deletions)
         case .fetchedRecordZoneChanges(let changes):
+            guard await mayTakeInChanges(from: syncEngine) else { return }
             await applyRemoteChanges(
                 records: changes.modifications.map(\.record),
                 deletions: changes.deletions.map(\.recordID),
@@ -552,7 +721,13 @@ final class LibrarySync: CKSyncEngineDelegate {
         case .sentDatabaseChanges(let sent):
             for failure in sent.failedZoneSaves {
                 logger.error("Couldn't create the iCloud zone: \(failure.error.localizedDescription, privacy: .public)")
-                if failure.error.code == .quotaExceeded { isStorageFull = true }
+                if failure.error.code == .quotaExceeded {
+                    // Nothing saves without the zone, so every save waits,
+                    // on the same backoff as books. Otherwise each record
+                    // sent into no zone would ask for the zone again.
+                    pauseForFullStorage(refusedUpdate: true, now: .now)
+                    saveLedger()
+                }
             }
         case .sentRecordZoneChanges(let sent):
             await handleSentRecords(sent, engine: syncEngine)
@@ -568,6 +743,30 @@ final class LibrarySync: CKSyncEngineDelegate {
         @unknown default:
             break
         }
+    }
+
+    /// Whether changes `syncEngine` fetched may be taken in: only from an
+    /// account this library may sync with. The engine fetches on its own
+    /// once an account is available, which can be before `checkAccount` has
+    /// heard back, so the account is checked here first. Changes from any
+    /// other account are dropped; sync has then restarted or turned off, and
+    /// what follows fetches them again.
+    private func mayTakeInChanges(from syncEngine: CKSyncEngine) async -> Bool {
+        if accountConfirmedEngine === syncEngine { return true }
+        guard let cloudContainer else { return false }
+        do {
+            let userRecordID = try await cloudContainer.userRecordID()
+            guard syncEngine === engine else { return false }
+            accountIsSignedIn(userRecordID.recordName)
+        } catch {
+            log("Couldn't read the iCloud user before taking in changes", error)
+            guard syncEngine === engine else { return false }
+            // Fetched past these changes: fetch everything again rather than
+            // miss them.
+            refetchEverything()
+            return false
+        }
+        return accountConfirmedEngine === syncEngine
     }
 
     /// Uploads begin once a full fetch has shown what iCloud already has.
@@ -594,6 +793,9 @@ final class LibrarySync: CKSyncEngineDelegate {
         var records: [CKRecord.ID: CKRecord] = [:]
         var batch: [CKSyncEngine.PendingRecordZoneChange] = []
         var assetBytes = 0
+        // After a storage pause, one book goes alone to see whether there's
+        // room now; the rest follow once it's in.
+        let isProbingStorage = ledger.storagePause != nil
         for change in changes {
             switch change {
             case .saveRecord(let recordID):
@@ -607,6 +809,7 @@ final class LibrarySync: CKSyncEngineDelegate {
             }
             batch.append(change)
             if batch.count >= Self.maxRecordsPerBatch || assetBytes >= Self.maxAssetBytesPerBatch { break }
+            if isProbingStorage && assetBytes > 0 { break }
         }
         guard syncEngine === engine else { return nil }
         let recordsToSave = records
@@ -631,15 +834,24 @@ final class LibrarySync: CKSyncEngineDelegate {
             engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
             return nil
         }
+        // Queued before iCloud reported the storage full: building it now
+        // would only prepare its files to be refused. It's queued again when
+        // the pause ends.
+        if ledger.holdsSave(key, now: .now) {
+            engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
+            return nil
+        }
         switch key.kind {
         case .state:
             let record = entry.stateSystemFields.flatMap(CloudRecordArchive.record(fromSystemFields:))
                 ?? CKRecord(recordType: key.recordType, recordID: recordID)
+            let now = Date.now
             ledger.stamped(
                 key.documentID,
                 position: document.readingPosition,
                 dateAdded: document.dateAdded,
-                now: .now
+                now: now,
+                unseenSince: unseenChangesSince(now)
             ).write(to: record)
             return (record, 0)
         case .book:
@@ -691,23 +903,146 @@ final class LibrarySync: CKSyncEngineDelegate {
 
     // MARK: - Account and zone
 
+    /// The library always stays on this device. A sign-out sets the ledger
+    /// aside for when that account signs back in, and sync never merges the
+    /// library into a different account without asking. The engine also
+    /// reports a change made while the app wasn't running, as one event from
+    /// the last account its state knew to the current one, and it resets its
+    /// state, pending changes included, whenever the account changes.
     private func handleAccountChange(_ change: CKSyncEngine.Event.AccountChange) {
+        let engine = self.engine
         switch change.changeType {
-        case .signIn:
-            scheduleReconcile()
-            // Uploads wait for a fetch that succeeds, which can only happen
-            // now.
-            fetchChanges(unlessFetchedWithin: 0)
-        case .signOut, .switchAccounts:
-            // The library stays on this device. It's matched against
-            // whichever account signs in next, then uploaded to it.
-            logger.notice("The iCloud account changed; starting sync over")
-            ledger = CloudSyncLedger(storeIdentifier: ledger.storeIdentifier)
+        case .signIn(let currentUser):
+            accountIsSignedIn(currentUser.recordName)
+            // Still this engine: going on with this account, rather than
+            // restoring its ledger or turning off.
+            if self.engine === engine {
+                scheduleReconcile()
+                // Uploads wait for a fetch that succeeds, which can only
+                // happen now.
+                fetchChanges(unlessFetchedWithin: 0)
+            }
+        case .signOut(let previousUser):
+            logger.notice("Signed out of iCloud; keeping the library and setting the sync ledger aside")
+            setLedgerAside(as: previousUser.recordName)
             restartEngine()
+        case .switchAccounts(let previousUser, let currentUser):
+            logger.notice("The iCloud account changed")
+            setLedgerAside(as: previousUser.recordName)
+            accountIsSignedIn(currentUser.recordName)
+            if self.engine === engine {
+                // Going on with it: from the new ledger, on a new engine.
+                restartEngine()
+            }
         @unknown default:
             break
         }
         refreshAccountStatus()
+    }
+
+    /// Decides what sync does with the account now signed in, before
+    /// anything is merged with it (see `SyncConsent.accountDecision`): goes
+    /// on, recording the account in a ledger that hasn't yet; brings back
+    /// the ledger set aside when this account signed out; or turns off and
+    /// asks, for an account other than the one the library last synced with.
+    private func accountIsSignedIn(_ account: String) {
+        let setAside = CloudSyncLedger.loadSetAside()
+        let decision = SyncConsent.accountDecision(
+            signedIn: account,
+            ledgerAccount: ledger.userRecordName,
+            accountAskedAbout: ledger.accountAskedAbout,
+            setAsideAccount: setAside?.userRecordName
+        )
+        switch decision {
+        case .proceed:
+            if ledger.userRecordName == nil {
+                ledger.userRecordName = account
+                ledger.accountAskedAbout = nil
+                saveLedger()
+                // The library syncs with this account now; the one set aside
+                // can't come back.
+                CloudSyncLedger.removeSetAside()
+            }
+            if let engine, accountConfirmedEngine !== engine {
+                accountConfirmedEngine = engine
+                scheduleReconcile()
+            }
+        case .restoreSetAside:
+            if let setAside { restoreSetAsideLedger(setAside) }
+        case .ask:
+            if let known = ledger.userRecordName {
+                // This ledger outlived the engine state that would have
+                // reported a switch.
+                setLedgerAside(as: known)
+            }
+            turnOffForNewAccount(account)
+        }
+    }
+
+    /// Keeps the ledger of an account that's no longer signed in beside the
+    /// current one, and goes on with a new ledger. If that account signs back
+    /// in, its ledger comes back, so deletions iCloud hadn't confirmed are
+    /// still sent and nothing uploads again. `account` is the one the
+    /// ledger's state belongs to; after an account event, the engine's
+    /// previous user, which wins over any account the ledger recorded.
+    private func setLedgerAside(as account: String) {
+        var outgoing = ledger
+        ledger = CloudSyncLedger(storeIdentifier: outgoing.storeIdentifier)
+        if outgoing.userRecordName == nil, CloudSyncLedger.loadSetAside() != nil {
+            // Started after the sign-out that set the other one aside, and
+            // never synced: the other one stays.
+            saveLedger()
+            return
+        }
+        outgoing.userRecordName = account
+        outgoing.accountAskedAbout = nil
+        do {
+            try outgoing.save(to: CloudSyncLedger.setAsideFileURL)
+        } catch {
+            logger.error("Couldn't set the sync ledger aside: \(error.localizedDescription, privacy: .public)")
+            // Still tied to the account, so any other one is asked about.
+            ledger.userRecordName = account
+        }
+        saveLedger()
+    }
+
+    /// Signed back in to the account whose ledger was set aside: sync picks
+    /// up from that ledger. `startEngine` checks it against the store and
+    /// the library like any saved ledger.
+    private func restoreSetAsideLedger(_ setAside: CloudSyncLedger) {
+        logger.notice("Signed back in to the iCloud account the library synced with; picking up where sync left off")
+        ledger = setAside
+        do {
+            try ledger.save()
+        } catch {
+            // Stopped until the next launch, which restores it again, rather
+            // than syncing without it.
+            logger.error("Couldn't restore the sync ledger: \(error.localizedDescription, privacy: .public)")
+            engine = nil
+            activeOperations = 0
+            return
+        }
+        CloudSyncLedger.removeSetAside()
+        restartEngine()
+    }
+
+    /// Signed in to an account other than the one the library last synced
+    /// with. Sync turns off rather than merge this device's library into it,
+    /// and the library asks (`SyncPrompt.newAccount`). The library stays,
+    /// and the ledger set aside for the other account waits.
+    private func turnOffForNewAccount(_ account: String) {
+        logger.notice("A different iCloud account is signed in; turning sync off until the user chooses")
+        engine = nil
+        activeOperations = 0
+        ledger = CloudSyncLedger(storeIdentifier: ledger.storeIdentifier)
+        ledger.accountAskedAbout = account
+        saveLedger()
+        let defaults = UserDefaults.standard
+        defaults.set(false, forKey: ReaderSettings.Keys.iCloudSyncEnabled)
+        defaults.set(true, forKey: ReaderSettings.Keys.iCloudSyncStoppedForNewAccount)
+        defaults.set(SyncPrompt.newAccount.rawValue, forKey: ReaderSettings.Keys.iCloudSyncPrompt)
+        isEnabled = false
+        stoppedForNewAccount = true
     }
 
     private func handleZoneDeletions(_ deletions: [CKDatabase.DatabaseChange.Deletion]) {
@@ -735,7 +1070,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         logger.notice("Strobe's iCloud data was deleted; turning sync off and keeping the library")
         engine = nil
         activeOperations = 0
-        ledger = CloudSyncLedger(storeIdentifier: ledger.storeIdentifier)
+        ledger = ledger.startingOver()
         saveLedger()
         let defaults = UserDefaults.standard
         defaults.set(false, forKey: ReaderSettings.Keys.iCloudSyncEnabled)
@@ -753,9 +1088,21 @@ final class LibrarySync: CKSyncEngineDelegate {
         var conflicts: [CKRecord] = []
         var needsZone = false
         var hitQuota = false
+        var quotaRefusedUpdate = false
+        var savedFirstUpload = false
 
         for record in sent.savedRecords {
             guard let key = CloudRecordKey(recordID: record.recordID) else { continue }
+            // Checked before it's confirmed: a book iCloud didn't have, or
+            // its first reading state.
+            if !ledger.isInICloud(key.documentID) {
+                savedFirstUpload = true
+                if key.kind == .book {
+                    // In iCloud for the first time, it may duplicate a copy
+                    // from another device; reconciling looks.
+                    scheduleReconcile()
+                }
+            }
             ledger.confirmSaved(
                 key,
                 systemFields: CloudRecordArchive.systemFields(of: record),
@@ -796,6 +1143,9 @@ final class LibrarySync: CKSyncEngineDelegate {
                 return
             case .quotaExceeded:
                 hitQuota = true
+                // An update the storage pause lets through: updates wait
+                // too, then, rather than being refused on every change.
+                if ledger.isInICloud(key.documentID) { quotaRefusedUpdate = true }
             case .networkFailure, .networkUnavailable, .zoneBusy, .serviceUnavailable,
                  .notAuthenticated, .operationCancelled, .requestRateLimited:
                 // CKSyncEngine retries these itself.
@@ -825,16 +1175,14 @@ final class LibrarySync: CKSyncEngineDelegate {
             }
         }
 
+        // A first upload going through means there's room again; a refusal
+        // in the same batch then starts the backoff over.
+        if !sent.savedRecords.isEmpty {
+            ledger.noteSavesAccepted(includingFirstUpload: savedFirstUpload)
+            isStorageFull = ledger.storagePause != nil
+        }
         if hitQuota {
-            // Nothing is saved for a while, rather than re-uploading books
-            // on every change while iCloud is full.
-            isStorageFull = true
-            let retryDate = now.addingTimeInterval(900)
-            storageFullUntil = retryDate
-            reconcile(after: retryDate)
-        } else if !sent.savedRecords.isEmpty {
-            isStorageFull = false
-            storageFullUntil = nil
+            pauseForFullStorage(refusedUpdate: quotaRefusedUpdate, now: now)
         }
         if needsZone {
             engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudSyncSchema.zoneID))])
@@ -863,6 +1211,32 @@ final class LibrarySync: CKSyncEngineDelegate {
             return entry.bookSystemFields == nil || entry.syncedTitle != document.title
         case .state:
             return entry.stateSystemFields == nil || entry.syncedState?.position != document.readingPosition
+        }
+    }
+
+    /// Holds saves after iCloud refused one for lack of storage: first
+    /// uploads, and updates too once one is refused. Each refusal in a row
+    /// doubles the pause, up to a day, rather than preparing the whole first
+    /// upload again every few minutes; see `CloudSyncLedger.holdsSave`.
+    private func pauseForFullStorage(refusedUpdate: Bool, now: Date) {
+        isStorageFull = true
+        guard let retryDate = ledger.noteStorageFull(refusedUpdate: refusedUpdate, now: now) else { return }
+        let minutes = Int(retryDate.timeIntervalSince(now) / 60)
+        logger.notice("iCloud storage is full; holding uploads for \(minutes) minutes")
+        resumeAfterStoragePause(at: retryDate)
+    }
+
+    /// Sends what a storage pause held once it ends. With nothing in iCloud
+    /// yet the zone may not be there either (its own save can be what was
+    /// refused), so it's saved again first, rather than found missing by a
+    /// batch of books.
+    private func resumeAfterStoragePause(at date: Date) {
+        Task {
+            try? await Task.sleep(for: .seconds(max(0, date.timeIntervalSinceNow) + 1))
+            if let engine, !ledger.hasRecordsInICloud, !ledger.isStoragePaused(now: .now) {
+                engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudSyncSchema.zoneID))])
+            }
+            scheduleReconcile()
         }
     }
 
@@ -948,6 +1322,9 @@ final class LibrarySync: CKSyncEngineDelegate {
         let id = key.documentID
         // Deleted here, with the deletion on its way.
         guard !ledger.isPendingDelete(id) else { return }
+        // Fetched again after being skipped, and taken off the list since,
+        // by a deletion or a newer copy from the engine: this one is stale.
+        guard !refetchingBooks.contains(id) || ledger.isSkipped(id) else { return }
         let systemFields = CloudRecordArchive.systemFields(of: record)
 
         if let document = documents[id] {
@@ -956,12 +1333,16 @@ final class LibrarySync: CKSyncEngineDelegate {
             }
             return
         }
+        // A skipped book is listed in the ledger and fetched again later,
+        // since the engine won't bring it back; see `refetchSkippedBooks`.
         guard fields.format <= CloudSyncSchema.bookFormat else {
             logger.notice("Skipping a book saved by a newer version of Strobe")
+            ledger.skipNewerFormatBook(id, format: fields.format, now: .now)
             return
         }
         guard let content = contents[id] else {
             logger.error("A book arrived without readable words; skipping it")
+            ledger.skipUnreadableBook(id, now: .now)
             return
         }
 
@@ -990,7 +1371,9 @@ final class LibrarySync: CKSyncEngineDelegate {
         // Copies of this book here that were never uploaded (it was imported
         // on this device too) fold into it instead of uploading again. During
         // the first fetch a copy's own record may still be on its way, so
-        // those wait for `mergeUnsentCopies`.
+        // those wait for `mergeUnsentCopies`. After it, a copy's upload may
+        // be under way, so one that the duplicate rule would keep if it
+        // landed uploads instead.
         guard ledger.hasFetchedEverything else { return }
         let unsentCopies = documents.values.filter { copy in
             copy.id != id
@@ -998,6 +1381,9 @@ final class LibrarySync: CKSyncEngineDelegate {
                 && copy.wordCount == fields.wordCount
                 && !ledger.isInICloud(copy.id)
                 && ledger.entry(for: copy.id)?.removal == nil
+                && CloudSyncLedger.mayMergeUnsentCopy(
+                    copy.id, addedAt: copy.dateAdded, into: id, keeperCreatedAt: record.creationDate
+                )
                 && contentHash(of: copy) == fields.contentHash
         }
         for copy in unsentCopies {
@@ -1017,7 +1403,8 @@ final class LibrarySync: CKSyncEngineDelegate {
             systemFields: CloudRecordArchive.systemFields(of: record),
             for: id,
             local: document.map { ($0.readingPosition, $0.dateAdded) },
-            now: now
+            now: now,
+            unseenSince: unseenChangesSince(now)
         )
         if let document, let position {
             document.applyReadingPosition(position)
@@ -1027,18 +1414,21 @@ final class LibrarySync: CKSyncEngineDelegate {
     /// A book deleted on another device leaves this one too, or once it
     /// closes if it's open. Reading not yet sent goes to an identical copy
     /// here, if there is one: the other device may have deleted this copy
-    /// in favor of that one.
+    /// in favor of that one. A copy kept that way is in iCloud, so one there
+    /// comes first; of several, the smallest ID, which is the one a
+    /// duplicate merge keeps.
     private func applyDeletion(of key: CloudRecordKey, documents: inout [UUID: Document], context: ModelContext, now: Date) {
         guard key.kind == .book, let document = documents[key.documentID] else {
             _ = ledger.receiveDeletion(of: key, isOpen: false)
             return
         }
         let keeper = ledger.entry(for: document.id)?.hasLocalDocument == true
-            ? identicalCopy(of: document, among: documents.values)
+            ? identicalCopy(of: document, among: documents.values.filter { ledger.isInICloud($0.id) })
+                ?? identicalCopy(of: document, among: documents.values)
             : nil
         let open = isOpen(document.id, now: now)
         if let keeper, !open,
-           let position = ledger.mergeReading(from: snapshot(of: document, now: now), into: snapshot(of: keeper, now: now), now: now) {
+           let position = ledger.mergeReading(from: snapshot(of: document, now: now), into: snapshot(of: keeper, now: now), now: now, unseenSince: unseenChangesSince(now)) {
             keeper.applyReadingPosition(position)
         }
         if ledger.receiveDeletion(of: key, isOpen: open, foldInto: keeper?.id) {
@@ -1060,6 +1450,95 @@ final class LibrarySync: CKSyncEngineDelegate {
         didRefetchAfterSaveFailure = true
         ledger.engineState = nil
         restartEngine()
+    }
+
+    // MARK: - Skipped books
+
+    /// Fetches again the books this device skipped that are due another try
+    /// (see `CloudSyncLedger.SkippedBook`). The engine's change token has
+    /// moved past their records, so they come straight from the database, a
+    /// few books at a time, and go through `applyRemoteChanges` like any
+    /// fetched change. Detached, like the other awaits on CloudKit; see
+    /// `fetchChanges`.
+    private func refetchSkippedBooks(on engine: CKSyncEngine) {
+        guard !isRefetchingSkippedBooks else { return }
+        let due = ledger.skippedBooksDue(now: .now)
+        guard !due.isEmpty else { return }
+        isRefetchingSkippedBooks = true
+        let database = engine.database
+        let groups = stride(from: 0, to: due.count, by: Self.maxBooksPerRefetch).map {
+            Array(due[$0..<min($0 + Self.maxBooksPerRefetch, due.count)])
+        }
+        Task.detached { [weak self] in
+            for ids in groups {
+                let recordIDs = ids.flatMap { [CloudRecordKey(.book, $0).recordID, CloudRecordKey(.state, $0).recordID] }
+                let results: [CKRecord.ID: Result<CKRecord, any Error>]?
+                do {
+                    results = try await database.records(for: recordIDs)
+                } catch {
+                    await self?.log("Fetching skipped books again failed", error)
+                    results = nil
+                }
+                guard await self?.applyRefetchedBooks(ids, results: results, engine: engine) == true else { break }
+            }
+            await self?.finishRefetchingSkippedBooks()
+        }
+    }
+
+    /// Takes in skipped books fetched again, `results` being nil when the
+    /// fetch failed outright. Returns whether to go on to the next few.
+    private func applyRefetchedBooks(
+        _ ids: [UUID],
+        results: [CKRecord.ID: Result<CKRecord, any Error>]?,
+        engine: CKSyncEngine
+    ) async -> Bool {
+        // Sync stopped or started over meanwhile: these belong to a ledger
+        // that's gone.
+        guard engine === self.engine else { return false }
+        let now = Date.now
+        guard let results else {
+            for id in ids { ledger.skippedBookFetchFailed(id, now: now) }
+            saveLedger()
+            return false
+        }
+        var records: [CKRecord] = []
+        var fetched: [UUID] = []
+        // Only those still skipped: a deletion or a newer copy may have come
+        // through the engine during the fetch.
+        for id in ids where ledger.isSkipped(id) {
+            switch results[CloudRecordKey(.book, id).recordID] {
+            case .success(let book)?:
+                records.append(book)
+                fetched.append(id)
+                if case .success(let state)? = results[CloudRecordKey(.state, id).recordID] {
+                    records.append(state)
+                }
+            case .failure(let error)?:
+                if let code = (error as? CKError)?.code, code == .unknownItem || code == .zoneNotFound {
+                    // Gone from iCloud.
+                    ledger.forgetSkippedBook(id)
+                } else {
+                    log("Couldn't fetch a skipped book again", error)
+                    ledger.skippedBookFetchFailed(id, now: now)
+                }
+            case nil:
+                ledger.skippedBookFetchFailed(id, now: now)
+            }
+        }
+        let skippedBefore = ledger.skippedBooks
+        if !records.isEmpty {
+            refetchingBooks = Set(fetched)
+            await applyRemoteChanges(records: records, deletions: [], engine: engine)
+            refetchingBooks = []
+            guard engine === self.engine else { return false }
+        }
+        ledger.finishRefetch(of: fetched, skippedBefore: skippedBefore)
+        saveLedger()
+        return true
+    }
+
+    private func finishRefetchingSkippedBooks() {
+        isRefetchingSkippedBooks = false
     }
 }
 
