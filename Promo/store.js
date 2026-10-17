@@ -1,5 +1,5 @@
-// Composes App Store screenshots from raw simulator captures: each one a book cover in
-// one of the app's cover tones, with a headline above the device.
+// Composes App Store screenshots from raw simulator captures, or Mac window captures:
+// each one a book cover in one of the app's cover tones, with a headline above the device.
 //
 //   bun store.js                       every shot in SHOTS → AppStore/Screenshots/<set>/
 //   bun store.js --only 01,04          just those shots, in every set that has them
@@ -44,6 +44,10 @@ const DEVICE = {
   },
   // iPad Pro 13-inch (M5), framed as in the September iPad set.
   iPadPro13: { points: { w: 1032, h: 1376 }, radii: [22.5, 22.5, 22.5, 22.5], bezel: 41.1, screenBorder: 35.5, metal: true },
+  // A Mac window as `screencapture -o -l <window id>` takes it at 2x: corners and all, no
+  // shadow, which the page adds. Every window in a shot shares one scale, so a Settings
+  // window stands beside the library at its real size.
+  macWindow: { window: true },
 };
 
 // Canvas sizes App Store Connect accepts, and where the copy and devices sit on each,
@@ -75,6 +79,18 @@ const SET = {
     layout: {
       margin: 106.6, top: 84.8, eyebrow: 18.6, headline: 65, subtitle: 22.6, subLine: 1.537, subWidth: 900,
       gap1: 24, gap2: 24.2, gap3: 16.7, rule: 81, ruleHeight: 1.94, deviceTop: 402.1, deviceW: 620.2,
+    },
+  },
+  // Landscape, the copy over a window, measured from the September Mac set. A 960 pt window
+  // is `deviceW` wide; the reader's (572 pt tall, its least) fits, and taller ones run off
+  // the bottom.
+  Mac: {
+    size: { w: 2880, h: 1800 },
+    device: "macWindow",
+    layout: {
+      margin: 121.5, top: 85.94, eyebrow: 21.15, headline: 69.7, subtitle: 25.0, subLine: 1.45, subWidth: 1400,
+      gap1: 28.31, gap2: 25.7, gap3: 18.3, rule: 86, ruleHeight: 2.2, deviceTop: 343.3, deviceW: 976,
+      windowPoints: 960,
     },
   },
 };
@@ -122,6 +138,28 @@ const SHOTS = [
     headline: "Never lose\nthe th{r}ead.", subtitle: "Show the words on either side, and any quote or parenthesis you're inside." },
   { set: "iPad 13-inch", id: "06", name: "full-text", tone: "slate", eyebrow: "Full text",
     headline: "The whole page,\none t{a}p away.", subtitle: "See where you are in the text, then tap any word to continue from there." },
+
+  // The Mac set, from windows of the Mac app.
+  { set: "Mac", id: "01", name: "one-word", tone: "inkBlue", eyebrow: "Speed reading", headline: "One w{o}rd at a time.",
+    subtitle: "Each word lands in the same spot, so your eyes can stay still." },
+  { set: "Mac", id: "02", name: "library", tone: "wine", eyebrow: "Your library", headline: "Every book, beautifully b{o}und.",
+    subtitle: "Import EPUB, PDF, or text files. Continue Reading picks up at your exact word." },
+  // The keys beside the headline, drawn over the page.
+  { set: "Mac", id: "03", name: "keyboard", tone: "deepTeal", eyebrow: "On the Mac", headline: "Made for the ke{y}board.",
+    subtitle: "Space to read and pause, arrow keys to step through words, Esc to go back.", overlay: { kind: "keys" } },
+  { set: "Mac", id: "04", name: "chapters", tone: "plum", eyebrow: "Chapters", headline: "Every chapter, at a gl{a}nce.",
+    subtitle: "See how long each chapter takes at your pace, and pick up right where you stopped." },
+  { set: "Mac", id: "05", name: "while-reading", tone: "tobacco", eyebrow: "While reading", headline: "Never lose the th{r}ead.",
+    subtitle: "Show the words on either side, and any quote or parenthesis you’re inside." },
+  // Settings in front of the library, each placed by its top left corner.
+  { set: "Mac", id: "06", name: "make-it-yours", tone: "indigo", eyebrow: "Make it yours", headline: "Your words, your w{a}y.",
+    subtitle: "Seven typefaces, four text colors, seven highlight colors, and true black for reading in the dark.",
+    devices: [
+      { spec: "macWindow", capture: "06-library", at: { left: 111, top: 334 } },
+      { spec: "macWindow", capture: "06-settings", at: { left: 918, top: 318 } },
+    ] },
+  { set: "Mac", id: "07", name: "full-text", tone: "slate", eyebrow: "Full text", headline: "The whole page, one c{l}ick away.",
+    subtitle: "See where you are in the text, then click any word to continue from there." },
 ];
 
 const arg = (name, fallback) => {
@@ -155,10 +193,10 @@ for (const shot of SHOTS) {
   if (only && !only.includes(shot.id)) continue;
   if (onlySet && onlySet !== setName) continue;
   const set = SET[setName];
-  const devices = (shot.devices ?? [{ spec: set.device, capture: shot.id }]).map(({ spec, capture }) => {
+  const devices = (shot.devices ?? [{ spec: set.device, capture: shot.id }]).map(({ spec, capture, at }) => {
     const screen = `/AppStore/Captures/${setName}/${capture}.png`;
     if (!existsSync(join(ROOT, screen))) throw new Error(`missing capture ${screen}`);
-    return { spec: DEVICE[spec], screen };
+    return { spec: DEVICE[spec], screen, at };
   });
   await page.setViewport({ width: set.size.w, height: set.size.h, deviceScaleFactor: 1 });
   await page.goto(`http://localhost:${server.port}/Promo/store.html`);

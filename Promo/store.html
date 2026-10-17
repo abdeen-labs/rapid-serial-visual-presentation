@@ -96,6 +96,38 @@
   /* The fold: a hinge in the frame's edge, and a faint crease across the screen. */
   .hinge { position: absolute; background: linear-gradient(#26262a, #0e0e10); }
   .crease { position: absolute; pointer-events: none; }
+
+  /* A Mac window: the capture keeps its corners, and the shadow follows them. Windows
+     placed by their corner sit in .placed, over the whole page. */
+  .window {
+    display: block;
+    filter:
+      drop-shadow(0 calc(var(--u) * 14) calc(var(--u) * 32) rgba(0,0,0,.5))
+      drop-shadow(0 0 calc(var(--u) * .6) rgba(0,0,0,.6));
+  }
+  .placed { position: absolute; inset: 0; }
+  .placed .window { position: absolute; }
+
+  /* Keys beside the headline, each group with what it does below it. */
+  .keys { position: absolute; right: var(--margin); top: calc(var(--u) * 130.6); display: flex; gap: calc(var(--u) * 21); }
+  .keys[hidden] { display: none; }
+  .keys .group { display: flex; flex-direction: column; align-items: center; gap: calc(var(--u) * 20.5); }
+  .keys .caps { display: flex; gap: calc(var(--u) * 7.8); }
+  .key {
+    height: calc(var(--u) * 55.5); border-radius: calc(var(--u) * 9);
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(#3d3d3f, #2d2d2f);
+    box-shadow:
+      0 calc(var(--u) * 3.9) 0 #161617,
+      inset 0 0 0 calc(var(--u) * .5) rgba(255,255,255,.07),
+      inset 0 calc(var(--u) * .6) 0 rgba(255,255,255,.09),
+      0 calc(var(--u) * 7) calc(var(--u) * 16) rgba(0,0,0,.22);
+    font: 700 calc(var(--u) * 14.4)/1 "Inter"; color: rgba(244,236,225,.9);
+  }
+  .key .tri { width: 0; height: 0; border: solid transparent; border-width: calc(var(--u) * 6.2) 0; }
+  .key .tri.left { border-right: calc(var(--u) * 11) solid rgba(244,236,225,.92); }
+  .key .tri.right { border-left: calc(var(--u) * 11) solid rgba(244,236,225,.92); }
+  .keys .caption { font: 400 calc(var(--u) * 16.5)/1 "Inter"; color: rgba(244,236,225,.62); }
 </style>
 </head>
 <body>
@@ -108,6 +140,8 @@
   <p class="sub" id="subtitle"></p>
 </div>
 <div class="devices" id="devices"></div>
+<div class="placed" id="placed"></div>
+<div class="keys" id="keys" hidden></div>
 <script>
 // Called by store.js with one shot's settings. `headline` marks its red letter
 // with braces: "One w{o}rd\nat a time."
@@ -150,9 +184,27 @@ window.compose = async (shot) => {
   row.innerHTML = "";
   row.style.gap = (L.deviceGap ?? 60) * u + "px";
   set("deviceTop", L.deviceTop * u + "px");
-  const pt = (L.deviceW * u) / Math.max(...shot.devices.map((d) => d.spec.points.w));
+  const pt = (L.deviceW * u) / Math.max(...shot.devices.map((d) => d.spec.points?.w ?? 0));
+  // A Mac window's pixels per point: `deviceW` for a window `windowPoints` wide.
+  const windowPt = (L.deviceW * u) / (L.windowPoints ?? 1);
+  const placed = document.getElementById("placed");
+  placed.innerHTML = "";
   const decodes = [];
-  for (const { spec: D, screen } of shot.devices) {
+  for (const { spec: D, screen, at } of shot.devices) {
+    if (D.window) {
+      // Captured at 2x, so its points are half its pixels.
+      const img = document.createElement("img");
+      img.className = "window";
+      img.src = screen;
+      decodes.push(img.decode().then(() => { img.style.width = (img.naturalWidth / 2) * windowPt + "px"; }));
+      if (at) {
+        Object.assign(img.style, { left: at.left * u + "px", top: at.top * u + "px" });
+        placed.appendChild(img);
+      } else {
+        row.appendChild(img);
+      }
+      continue;
+    }
     const bezel = D.bezel * pt;
     const rad = (c, extra = 0) => c.map((x) => (x + extra) * pt + "px").join(" ");
     const body = document.createElement("div");
@@ -229,6 +281,41 @@ window.compose = async (shot) => {
         width: fingerD + "px", height: fingerD + "px" });
     }
     row.appendChild(body);
+  }
+  const keys = document.getElementById("keys");
+  keys.hidden = shot.overlay?.kind !== "keys";
+  if (!keys.hidden) {
+    // Key widths in units; a `tri` key draws an arrow instead of a label.
+    const groups = [
+      { caption: "Back", caps: [{ label: "esc", w: 82.2 }] },
+      { caption: "Read and pause", caps: [{ label: "space", w: 206.7 }] },
+      { caption: "Step", caps: [{ tri: "left", w: 56.7 }, { tri: "right", w: 56.7 }] },
+    ];
+    keys.innerHTML = "";
+    for (const g of groups) {
+      const group = document.createElement("div");
+      group.className = "group";
+      const caps = document.createElement("div");
+      caps.className = "caps";
+      for (const c of g.caps) {
+        const key = document.createElement("div");
+        key.className = "key";
+        key.style.width = c.w * u + "px";
+        if (c.tri) {
+          const tri = document.createElement("div");
+          tri.className = "tri " + c.tri;
+          key.appendChild(tri);
+        } else {
+          key.textContent = c.label;
+        }
+        caps.appendChild(key);
+      }
+      const caption = document.createElement("div");
+      caption.className = "caption";
+      caption.textContent = g.caption;
+      group.append(caps, caption);
+      keys.appendChild(group);
+    }
   }
   await Promise.all(decodes);
   await document.fonts.ready;
