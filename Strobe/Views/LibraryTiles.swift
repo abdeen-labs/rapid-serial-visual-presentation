@@ -277,11 +277,13 @@ struct ContinueReadingCard: View {
 /// A thin reading-progress bar in the accent color.
 struct ReadingProgressBar: View {
     let progress: Double
+    /// The reader's bar thickens while it's dragged.
+    var height: CGFloat = 4
 
     var body: some View {
         Capsule()
             .fill(.white.opacity(0.16))
-            .frame(height: 4)
+            .frame(height: height)
             .overlay(alignment: .leading) {
                 GeometryReader { geo in
                     Capsule()

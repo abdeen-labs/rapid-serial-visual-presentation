@@ -1,8 +1,9 @@
 // Composes App Store screenshots from raw simulator captures: each one a book cover in
 // one of the app's cover tones, with a headline above the device.
 //
-//   bun store.js                 every shot in SHOTS → AppStore/Screenshots/<set>/
-//   bun store.js --only 01,04    just those shots
+//   bun store.js                       every shot in SHOTS → AppStore/Screenshots/<set>/
+//   bun store.js --only 01,04          just those shots, in every set that has them
+//   bun store.js --set "iPhone Duo"    just that set's shots (combines with --only)
 //
 // Raw captures live in AppStore/Captures/<set>/, named like the shot.
 
@@ -22,10 +23,27 @@ const TONE = {
 
 // Screens in points, corner radii clockwise from the top left, and the frame's bezel.
 // From the iPhone Duo simulator's device profile.
+//
+// `screenBorder` is the black border inside the bezel, around the screen; `buttons`
+// stand `buttonDepth` out from the frame's sides, `top` and `height` down from the
+// frame's top. All in points.
 const DEVICE = {
   duoOuter: { points: { w: 466, h: 678 }, radii: [8, 59, 59, 8], bezel: 9, fold: "spine-left" },
   duoInner: { points: { w: 669, h: 951 }, radii: [55, 55, 55, 55], bezel: 8, fold: "horizontal" },
   duoInnerLandscape: { points: { w: 951, h: 669 }, radii: [55, 55, 55, 55], bezel: 8, fold: "vertical" },
+  // iPhone 18 Pro Max, framed as in the September 6.9" set: a thin metal band, a black
+  // border, and the action, volume, side, and Camera Control buttons.
+  iphoneProMax: {
+    points: { w: 440, h: 956 }, radii: [62, 62, 62, 62], bezel: 17.7, screenBorder: 13, metal: true,
+    buttonDepth: 6,
+    buttons: [
+      { side: "left", top: 168, height: 24 }, { side: "left", top: 238, height: 43 },
+      { side: "left", top: 322, height: 45 }, { side: "right", top: 260, height: 68 },
+      { side: "right", top: 540, height: 40 },
+    ],
+  },
+  // iPad Pro 13-inch (M5), framed as in the September iPad set.
+  iPadPro13: { points: { w: 1032, h: 1376 }, radii: [22.5, 22.5, 22.5, 22.5], bezel: 41.1, screenBorder: 35.5, metal: true },
 };
 
 // Canvas sizes App Store Connect accepts, and where the copy and devices sit on each,
@@ -38,6 +56,25 @@ const SET = {
     layout: {
       margin: 128, top: 88, eyebrow: 22, headline: 64, subtitle: 23, subWidth: 1250,
       gap1: 26, gap2: 26, rule: 72, deviceTop: 322, deviceW: 890, deviceGap: 70,
+    },
+  },
+  // Portrait, the copy over the whole device. Measured from the September set, whose
+  // other shots came from an earlier tool and have no captures here.
+  "iPhone 6.9-inch": {
+    size: { w: 1320, h: 2868 },
+    device: "iphoneProMax",
+    layout: {
+      margin: 114, top: 131.3, eyebrow: 26.2, headline: 106.5, subtitle: 34, subLine: 1.537, subWidth: 800,
+      gap1: 34, gap2: 41.5, gap3: 27.3, rule: 132, ruleHeight: 3, deviceTop: 652, deviceW: 641,
+    },
+  },
+  // Portrait, measured from the September set like the 6.9" one.
+  "iPad 13-inch": {
+    size: { w: 2064, h: 2752 },
+    device: "iPadPro13",
+    layout: {
+      margin: 106.6, top: 84.8, eyebrow: 18.6, headline: 65, subtitle: 22.6, subLine: 1.537, subWidth: 900,
+      gap1: 24, gap2: 24.2, gap3: 16.7, rule: 81, ruleHeight: 1.94, deviceTop: 402.1, deviceW: 620.2,
     },
   },
 };
@@ -65,6 +102,26 @@ const SHOTS = [
     subtitle: "Commas, dashes, and sentence ends each get a pause, and long words get extra time." },
   { id: "09", name: "full-text", tone: "rust", eyebrow: "Full text", headline: "The whole page, one t{a}p away.",
     subtitle: "See where you are in the text, then tap any word to continue from there." },
+
+  // The 6.9" shots that show the reader. 02, 04, 06, 07, and 09 predate this tool.
+  { set: "iPhone 6.9-inch", id: "01", name: "one-word", tone: "inkBlue", eyebrow: "Speed reading",
+    headline: "One w{o}rd\nat a time.", subtitle: "Each word lands in the same spot, so your eyes can stay still." },
+  // A finger holding the screen and sliding up for speed, drawn over the capture.
+  { set: "iPhone 6.9-inch", id: "03", name: "hold-to-read", tone: "deepTeal", eyebrow: "Hold to read",
+    headline: "Hold to r{e}ad.\nLet go to pause.", subtitle: "Slide up or down as you read to change speed on the fly.",
+    overlay: { kind: "holdDrag", x: 220, top: 557, bottom: 783, finger: 667 } },
+  { set: "iPhone 6.9-inch", id: "05", name: "while-reading", tone: "tobacco", eyebrow: "While reading",
+    headline: "Never lose\nthe th{r}ead.", subtitle: "Show the words on either side, and any quote or parenthesis you're inside." },
+  { set: "iPhone 6.9-inch", id: "08", name: "full-text", tone: "slate", eyebrow: "Full text",
+    headline: "The whole page,\none t{a}p away.", subtitle: "See where you are in the text, then tap any word to continue from there." },
+
+  // The iPad shots that show the reader. 02, 03, and 05 predate this tool.
+  { set: "iPad 13-inch", id: "01", name: "one-word", tone: "inkBlue", eyebrow: "Speed reading",
+    headline: "One w{o}rd\nat a time.", subtitle: "Each word lands in the same spot, so your eyes can stay still." },
+  { set: "iPad 13-inch", id: "04", name: "while-reading", tone: "tobacco", eyebrow: "While reading",
+    headline: "Never lose\nthe th{r}ead.", subtitle: "Show the words on either side, and any quote or parenthesis you're inside." },
+  { set: "iPad 13-inch", id: "06", name: "full-text", tone: "slate", eyebrow: "Full text",
+    headline: "The whole page,\none t{a}p away.", subtitle: "See where you are in the text, then tap any word to continue from there." },
 ];
 
 const arg = (name, fallback) => {
@@ -72,6 +129,7 @@ const arg = (name, fallback) => {
   return i >= 0 ? process.argv[i + 1] : fallback;
 };
 const only = arg("only", null)?.split(",");
+const onlySet = arg("set", null);
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".ttf": "font/ttf", ".png": "image/png" };
 const server = Bun.serve({
@@ -93,8 +151,9 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 
 for (const shot of SHOTS) {
-  if (only && !only.includes(shot.id)) continue;
   const setName = shot.set ?? "iPhone Duo";
+  if (only && !only.includes(shot.id)) continue;
+  if (onlySet && onlySet !== setName) continue;
   const set = SET[setName];
   const devices = (shot.devices ?? [{ spec: set.device, capture: shot.id }]).map(({ spec, capture }) => {
     const screen = `/AppStore/Captures/${setName}/${capture}.png`;

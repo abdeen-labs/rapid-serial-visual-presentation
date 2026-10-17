@@ -14,7 +14,7 @@ struct ChapterAnnouncementView: View {
         VStack(spacing: 14) {
             if let label = parts.label {
                 Text(label)
-                    .font(StrobeTheme.bodyFont(size: 11, bold: true, relativeTo: .caption))
+                    .font(.caption2.weight(.semibold))
                     .tracking(2)
                     .textCase(.uppercase)
                     .foregroundStyle(StrobeTheme.textSecondary)
