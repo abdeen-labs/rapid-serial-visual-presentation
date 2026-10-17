@@ -14,6 +14,8 @@ Tests use the **Swift Testing** framework (not XCTest):
 ### App Store screenshots
 `AppStore/Screenshots/<device>/` holds what gets uploaded. The iPhone Duo set is composed by `Promo/store.js` (`bun store.js`, or `--only 01,04`) from raw simulator screens in `AppStore/Captures/iPhone Duo/`: each shot is a cover-toned page with a Fraunces headline above a drawn device frame (`Promo/store.html`). Capture with `xcrun simctl io <udid> screenshot --display=primary-1` for the inner screen (2853×2007 when open) and `--display=primary` for the outer one.
 
+`AppStore/Creative/` holds the iOS 27 creative assets: the product page header (`header.png`, 3840×1646, 21:9) and the search results image (`search-results.png`, 3840×2560, 3:2), composed by `Promo/creative.js` (`Promo/creative.html`) from `AppStore/Captures/Creative/`. App Store Connect crops both, so what matters stays inside Apple's art safe areas (from Apple's template, listed in `creative.js`); `bun creative.js --safe` outlines them, writing to `Promo/out/`. Neither image may have an alpha channel.
+
 ## Architecture
 
 Strobe is an RSVP (Rapid Serial Visual Presentation) speed reader for iOS and macOS. Users import PDFs/EPUBs/plain-text files or paste text, then read word-by-word with configurable timing.
@@ -99,8 +101,8 @@ Strobe/
 ├── Fonts/        Custom font files (Fraunces, Inter, JetBrainsMono, PT*, SpaceGrotesk)
 StrobeWidget/     Continue Reading widget extension: the widget, its views, Info.plist, entitlements, assets
 StrobeShare/      Share extension: ShareViewController (principal class), ShareView/ShareModel (the sheet), SharedContentLoader, WebPageReader, ArticleExtractor.js
-Promo/            The video ad (render.js, scene.html) and the App Store screenshot compositor (store.js, store.html)
-AppStore/         Screenshots/<device>/ for App Store Connect, Captures/<device>/ for the raw screens store.js composes
+Promo/            The video ad (render.js, scene.html), the App Store screenshot compositor (store.js, store.html), and the creative-asset one (creative.js, creative.html)
+AppStore/         Screenshots/<device>/ and Creative/ for App Store Connect, Captures/ for the raw screens store.js and creative.js compose
 ```
 
 ## Conventions

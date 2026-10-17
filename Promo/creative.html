@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Fraunces"; src: url("/Strobe/Fonts/Fraunces-Variable.ttf"); font-weight: 100 900; }
+  @font-face { font-family: "Inter"; src: url("/Strobe/Fonts/Inter-Regular.ttf"); font-weight: 400; }
+  @font-face { font-family: "Inter"; src: url("/Strobe/Fonts/Inter-Bold.ttf"); font-weight: 700; }
+
+  :root {
+    --ink: #F4ECE1;
+    --red: #FF3B30;
+    --anchor: #FF453A;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: var(--w); height: var(--h); overflow: hidden; background: #050505; }
+  .layer { position: absolute; inset: 0; display: none; }
+  body[data-kind="header"] #header, body[data-kind="search"] #search { display: block; }
+
+  /* Header: a line of copy as the reader would show it, on the reader's black. */
+  #header { background: #050505; }
+  .line { position: absolute; left: 0; top: 0; white-space: nowrap; font-family: "Fraunces"; font-weight: 400; color: #fff; }
+  .line .b { font-weight: 700; color: var(--anchor); }
+  .guide { position: absolute; background: var(--anchor); }
+
+  /* Search results: a book cover in one of the app's cover tones (as in the screenshots). */
+  .cover {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(to right, transparent 40%, rgba(0,0,0,.06)),
+      linear-gradient(to bottom,
+        rgba(255,255,255,.25) 0%, rgba(255,255,255,.13) 20%, rgba(255,255,255,.03) 40%,
+        rgba(0,0,0,.04) 50%, rgba(0,0,0,.19) 60%, rgba(0,0,0,.31) 70%,
+        rgba(0,0,0,.41) 80%, rgba(0,0,0,.49) 90%, rgba(0,0,0,.59) 100%),
+      var(--tone);
+  }
+  .spine {
+    position: absolute; top: 0; bottom: 0; left: 0; width: var(--spine);
+    background: rgba(0,0,0,.28);
+    box-shadow: calc(var(--u) * 0.6) 0 0 rgba(255,255,255,.08);
+  }
+  .copy { position: absolute; color: var(--ink); }
+  .eyebrow {
+    font: 700 var(--eyebrow)/1 "Inter";
+    letter-spacing: .2em; text-transform: uppercase;
+    color: rgba(244,236,225,.55);
+  }
+  h1 {
+    margin-top: var(--gap1);
+    font-family: "Fraunces"; font-weight: 600;
+    font-variation-settings: "opsz" 144, "SOFT" 0, "WONK" 0;
+    font-size: var(--headline); line-height: 1.06; letter-spacing: -.008em; word-spacing: .04em;
+  }
+  h1 .o { color: var(--red); }
+
+  .body {
+    position: absolute;
+    background: linear-gradient(145deg, #3a3a3e, #1b1b1d 30%, #141416 70%, #2b2b2e);
+    box-shadow:
+      0 calc(var(--u) * 30) calc(var(--u) * 80) rgba(0,0,0,.55),
+      0 calc(var(--u) * 6) calc(var(--u) * 16) rgba(0,0,0,.35),
+      inset 0 0 0 calc(var(--u) * 1) rgba(255,255,255,.10),
+      inset 0 0 0 calc(var(--u) * 2.4) rgba(0,0,0,.6);
+  }
+  .screen { display: block; width: 100%; background: #050505; }
+  .island { position: absolute; background: #000; }
+  .button { position: absolute; background: linear-gradient(to right, #2c2c2f, #19191b); }
+</style>
+</head>
+<body>
+<div class="layer" id="header"></div>
+<div class="layer" id="search">
+  <div class="cover"></div>
+  <div class="spine"></div>
+  <div class="copy" id="copy">
+    <div class="eyebrow" id="eyebrow"></div>
+    <h1 id="headline"></h1>
+  </div>
+  <div id="device"></div>
+</div>
+<script>
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+// The reader's ORP anchor: the letter WordView highlights (1 → 1st, 2–5 → 2nd,
+// 6–9 → 3rd, 10–13 → 4th, 14+ → 5th letter or digit).
+function anchorIndex(word) {
+  const letters = [...word].map((c, i) => (/[\p{L}\p{N}]/u.test(c) ? i : -1)).filter((i) => i >= 0);
+  const n = letters.length;
+  const pos = n < 2 ? 0 : n <= 5 ? 1 : n <= 9 ? 2 : n <= 13 ? 3 : 4;
+  return letters[pos] ?? 0;
+}
+
+// A line of copy drawn the way the reader draws a word: one word lit, its anchor
+// letter red on a faint guide line, the words around it dimmed. The line is sized
+// to `width` and centered on the canvas.
+function header(s) {
+  const root = document.getElementById("header");
+  root.innerHTML = "";
+  const { w, h } = s.size;
+  const words = s.text.split(" ");
+  const at = s.wordIndex;
+
+  const line = document.createElement("div");
+  line.className = "line";
+  words.forEach((word, i) => {
+    const span = document.createElement("span");
+    if (i === at) {
+      const a = anchorIndex(word);
+      const chars = [...word];
+      span.innerHTML = esc(chars.slice(0, a).join("")) + `<span class="b">${esc(chars[a])}</span>` + esc(chars.slice(a + 1).join(""));
+    } else {
+      span.textContent = word;
+      span.style.opacity = Math.max(s.farthest, s.nearest * Math.pow(s.falloff, Math.abs(i - at) - 1));
+    }
+    if (i < words.length - 1) span.style.marginRight = s.gap + "em";
+    line.appendChild(span);
+  });
+  root.appendChild(line);
+
+  line.style.fontSize = "100px";
+  const size = (100 * s.width) / line.getBoundingClientRect().width;
+  line.style.fontSize = size + "px";
+  const box = line.getBoundingClientRect();
+  const cy = s.centerY ?? h / 2;
+  line.style.left = (w - box.width) / 2 + "px";
+  line.style.top = cy - box.height / 2 + "px";
+
+  const anchor = line.querySelector(".b").getBoundingClientRect();
+  const g = document.createElement("div");
+  g.className = "guide";
+  Object.assign(g.style, {
+    left: anchor.left + anchor.width / 2 - s.guideWidth / 2 + "px", width: s.guideWidth + "px",
+    top: cy - size * 0.8 + "px", height: size * 1.6 + "px", opacity: s.guideOpacity,
+  });
+  root.insertBefore(g, line);
+}
+
+// A headline on a cover, beside a phone showing the reader.
+async function search(s) {
+  const r = document.documentElement.style;
+  const { w, h } = s.size;
+  const u = Math.min(w, h) / 1000;
+  r.setProperty("--u", u + "px");
+  r.setProperty("--tone", s.tone);
+  r.setProperty("--spine", Math.round(u * 30) + "px");
+  r.setProperty("--eyebrow", (s.eyebrow?.size ?? 0) * u + "px");
+  r.setProperty("--headline", s.headline.size * u + "px");
+  r.setProperty("--gap1", (s.eyebrow ? s.headline.gap : 0) * u + "px");
+
+  document.getElementById("eyebrow").textContent = s.eyebrow?.text ?? "";
+  document.getElementById("eyebrow").style.display = s.eyebrow ? "" : "none";
+  document.getElementById("headline").innerHTML = esc(s.headline.text)
+    .replace(/\{(.+?)\}/g, '<span class="o">$1</span>')
+    .replace(/\n/g, "<br>");
+
+  // The phone: screen in points scaled to `height` pixels, its corners from the
+  // simulator's device profile.
+  const D = s.device;
+  const pt = (s.phone.height) / (D.points.h + 2 * D.bezel);
+  const bezel = D.bezel * pt;
+  const body = document.createElement("div");
+  body.className = "body";
+  const bw = D.points.w * pt + 2 * bezel, bh = D.points.h * pt + 2 * bezel;
+  Object.assign(body.style, {
+    left: s.phone.centerX - bw / 2 + "px", top: s.phone.top + "px",
+    width: bw + "px", padding: bezel + "px", borderRadius: (D.radius + D.bezel) * pt + "px",
+  });
+  const img = document.createElement("img");
+  img.className = "screen";
+  img.style.borderRadius = D.radius * pt + "px";
+  img.src = s.screen;
+  body.appendChild(img);
+  const island = document.createElement("div");
+  island.className = "island";
+  Object.assign(island.style, {
+    left: `calc(50% - ${D.island.w * pt / 2}px)`, top: bezel + D.island.y * pt + "px",
+    width: D.island.w * pt + "px", height: D.island.h * pt + "px", borderRadius: D.island.h * pt / 2 + "px",
+  });
+  body.appendChild(island);
+  // Side buttons: action and volume on the left, side button on the right.
+  for (const [side, y, len] of [["left", 120, 34], ["left", 175, 62], ["left", 250, 62], ["right", 210, 100]]) {
+    const b = document.createElement("div");
+    b.className = "button";
+    Object.assign(b.style, { [side]: -2.2 * pt + "px", top: y * pt + "px", width: 2.6 * pt + "px", height: len * pt + "px", borderRadius: 1.2 * pt + "px" });
+    body.appendChild(b);
+  }
+  const device = document.getElementById("device");
+  device.innerHTML = "";
+  device.appendChild(body);
+  await img.decode();
+
+  // The copy, centered vertically on the canvas, its left edge at `copyLeft`.
+  const copy = document.getElementById("copy");
+  copy.style.left = s.copyLeft + "px";
+  await document.fonts.ready;
+  copy.style.top = (s.copyCenterY ?? h / 2) - copy.getBoundingClientRect().height / 2 + "px";
+}
+
+// Called by creative.js with one asset's settings.
+window.compose = async (s) => {
+  const r = document.documentElement.style;
+  r.setProperty("--w", s.size.w + "px");
+  r.setProperty("--h", s.size.h + "px");
+  document.body.dataset.kind = s.kind;
+  await document.fonts.load(`400 100px "Fraunces"`);
+  await document.fonts.load(`700 100px "Fraunces"`);
+  await document.fonts.load(`600 100px "Fraunces"`);
+  await document.fonts.load(`700 100px "Inter"`);
+  if (s.kind === "header") header(s);
+  else await search(s);
+  await document.fonts.ready;
+
+  // Apple's safe area, drawn only when asked (--safe).
+  if (s.showSafe) {
+    const el = document.createElement("div");
+    Object.assign(el.style, {
+      position: "absolute", left: s.safe.x + "px", top: s.safe.y + "px", width: s.safe.w + "px", height: s.safe.h + "px",
+      outline: "4px solid #0f0", background: "rgba(0,255,0,.08)", zIndex: 10,
+    });
+    document.body.appendChild(el);
+  }
+};
+</script>
+</body>
+</html>
