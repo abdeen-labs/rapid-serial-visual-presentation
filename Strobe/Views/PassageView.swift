@@ -155,53 +155,52 @@ struct PassageView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(document.title)
-                    .font(readerFont.boldFont(size: 18))
-                    .foregroundStyle(StrobeTheme.textPrimary)
+                    .font(StrobeTheme.displayFont(size: 20, relativeTo: .title3))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("\(engine.currentIndex + 1) / \(words.count)")
-                    .font(readerFont.regularFont(size: 12))
-                    .foregroundStyle(StrobeTheme.textSecondary)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Word \(engine.currentIndex + 1) of \(words.count)")
+                    .font(StrobeTheme.metadataFont)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
 
-            Spacer()
+            Spacer(minLength: 12)
 
             Button {
                 dismiss()
             } label: {
                 Text("Done")
-                    .font(readerFont.boldFont(size: 16))
-                    .foregroundStyle(StrobeTheme.accent)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 18)
+                    .frame(minHeight: 44)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Done")
+            .buttonStyle(ReaderGlassButtonStyle(shape: Capsule()))
             .accessibilityHint("Close text view")
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.bottom, 12)
     }
 
-    /// Circular floating action button overlaid on the lower-right of the
-    /// scroll. Publishes via `scrollIntent` so the actual `scrollTo` runs
-    /// inside the `ScrollViewReader` closure that owns the proxy.
+    /// The round button at the lower right of the scroll that brings the
+    /// current word back into view, in the color that marks it. Publishes
+    /// via `scrollIntent` so the actual `scrollTo` runs inside the
+    /// `ScrollViewReader` closure that owns the proxy.
     private var floatingFocusButton: some View {
-        Button {
+        ReaderGlassButton(
+            systemImage: "scope",
+            accessibilityLabel: "Center on current word",
+            tint: textTone.anchorColor(for: highlightColor),
+            diameter: 48
+        ) {
             scrollIntent = .currentWord
-        } label: {
-            Image(systemName: "scope")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(StrobeTheme.accent)
-                .frame(width: 48, height: 48)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().stroke(StrobeTheme.accent.opacity(0.35), lineWidth: 1))
-                .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 3)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Center on current word")
     }
 
     // MARK: - Search
@@ -210,7 +209,6 @@ struct PassageView: View {
         StrobeSearchBar(
             placeholder: "Search text",
             text: $searchQuery,
-            font: readerFont.regularFont(size: 15),
             onClear: {
                 searchTask?.cancel()
                 searchQuery = ""
@@ -246,42 +244,25 @@ struct PassageView: View {
 
     @ViewBuilder
     private var searchNav: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Text(matchCountLabel)
-                .font(readerFont.regularFont(size: 13))
-                .foregroundStyle(matchIndices.isEmpty ? StrobeTheme.textSecondary.opacity(0.6) : StrobeTheme.textSecondary)
+                .font(.footnote)
+                .foregroundStyle(matchIndices.isEmpty ? HierarchicalShapeStyle.tertiary : .secondary)
+                .monospacedDigit()
 
             Spacer()
 
-            Button {
+            ReaderGlassButton(systemImage: "chevron.up", accessibilityLabel: "Previous match") {
                 stepMatch(by: -1)
-            } label: {
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(matchIndices.isEmpty ? StrobeTheme.textSecondary.opacity(0.4) : StrobeTheme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(StrobeTheme.surface)
-                    .clipShape(Circle())
             }
-            .buttonStyle(.plain)
             .disabled(matchIndices.isEmpty)
-            .accessibilityLabel("Previous match")
 
-            Button {
+            ReaderGlassButton(systemImage: "chevron.down", accessibilityLabel: "Next match") {
                 stepMatch(by: 1)
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(matchIndices.isEmpty ? StrobeTheme.textSecondary.opacity(0.4) : StrobeTheme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(StrobeTheme.surface)
-                    .clipShape(Circle())
             }
-            .buttonStyle(.plain)
             .disabled(matchIndices.isEmpty)
-            .accessibilityLabel("Next match")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 20)
         .padding(.bottom, 6)
     }
 

@@ -10,9 +10,11 @@ import AppKit
 ///
 /// Gesture-driven: hold to play (or tap to toggle, when `holdToReadEnabled`
 /// is off), release to pause, swipe to scrub, two fingers to read hands-free
-/// (see ``ReaderTouch``). Includes a WPM slider, chapter navigation (when
-/// chapters exist), progress bar scrubber, and completion overlay. Persists
-/// reading state on disappear and scene phase changes.
+/// (see ``ReaderTouch``). Paused, a top bar holds Back, the title, View
+/// Text, and the speed slider, and a bottom panel holds chapter navigation
+/// (when chapters exist) and the progress bar with the time left; both fade
+/// out while reading. Shows a completion card at the end. Persists reading state
+/// on disappear and scene phase changes.
 struct ReaderView: View {
     private let navFadeDuration: Double = 0.3
     private let playIntentDelay: TimeInterval = 0.12
@@ -58,7 +60,6 @@ struct ReaderView: View {
     @GestureState private var isDragActive = false
     @State private var wpmSliderValue: Double
     @State private var isAdjustingWPM = false
-    @State private var isBarScrubbing = false
     @State private var showCompletion = false
     @State private var showChapterPicker = false
     @State private var showPassage = false
@@ -87,10 +88,14 @@ struct ReaderView: View {
         )
     }
 
-    /// On iPad (regular width) we constrain controls to a comfortable column so
-    /// sliders and buttons don't stretch the full width of a 12.9" display.
+    /// On iPad and Mac the bottom panel keeps to a comfortable column so its
+    /// sliders don't stretch the full width of a 13" display.
     private var controlsMaxWidth: CGFloat {
-        horizontalSizeClass == .regular ? 680 : .infinity
+        #if os(macOS)
+        560
+        #else
+        horizontalSizeClass == .regular ? 560 : .infinity
+        #endif
     }
 
     init(document: Document, startingWordIndex: Int? = nil) {
@@ -302,6 +307,11 @@ struct ReaderView: View {
         .task(id: enclosingMarksEnabled && isLoaded) {
             await pairEnclosingMarksIfNeeded()
         }
+        // The time left follows the timing settings once the document's pace
+        // is worked out, and again after they change.
+        .task(id: ReadingPace.shared.key(for: document)) {
+            ReadingPace.shared.prepare(document)
+        }
         .onAppear {
             readerFocused = true
             AppRouter.shared.readerDidAppear(documentID: document.id)
@@ -354,6 +364,11 @@ struct ReaderView: View {
                     showCompletionOverlay()
                 }
             }
+        }
+        .onChange(of: engine.wordsPerMinute) { _, newValue in
+            // A speed set another way (VoiceOver's adjust actions) moves the
+            // slider with it.
+            if !isAdjustingWPM { wpmSliderValue = Double(newValue) }
         }
         .onChange(of: smartTimingEnabled) { _, newValue in
             engine.smartTimingEnabled = newValue
@@ -674,161 +689,197 @@ struct ReaderView: View {
 
     // MARK: - Top bar
 
+    /// Back, the title, and View Text, laid out like a navigation bar, over
+    /// the speed. Speed sits up here rather than in the bottom panel so the
+    /// two bars stay about the same height: the word's line has to clear
+    /// both on the smallest screens, and the marks above the word get the
+    /// room to the nearer bar.
     private var topBar: some View {
-        topBarContent
-            .constrainedAndCentered(maxWidth: controlsMaxWidth)
-            .animation(.easeInOut(duration: navFadeDuration), value: engine.isPlaying)
+        VStack(spacing: 0) {
+            navigationRow
+            speedControl
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .constrainedAndCentered(maxWidth: controlsMaxWidth)
+        }
+        .opacity(engine.isPlaying ? 0.0 : 1.0)
+        // Zero opacity does not disable hit testing — without this, taps
+        // during playback land on the invisible controls instead of the
+        // gesture layer (and can silently change the reading speed).
+        .allowsHitTesting(!engine.isPlaying)
+        .animation(.easeInOut(duration: navFadeDuration), value: engine.isPlaying)
     }
 
-    private var topBarContent: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                CircleIconButton(systemImage: "chevron.left", accessibilityLabel: "Back") {
-                    dismiss()
-                }
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text(document.title)
-                        .font(StrobeTheme.bodyFont(size: 16, bold: true))
-                        .foregroundStyle(StrobeTheme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    WordCounterView(engine: engine)
-                }
-
-                Spacer()
-
-                CircleIconButton(systemImage: "text.alignleft", accessibilityLabel: "View text") {
-                    showPassage = true
-                }
-                .accessibilityHint("Shows the full passage with your current word highlighted")
+    private var navigationRow: some View {
+        HStack(spacing: 12) {
+            ReaderGlassButton(systemImage: "chevron.left", accessibilityLabel: "Back") {
+                dismiss()
             }
-            .padding(.horizontal)
-            .padding(.top, 8)
-            .opacity(engine.isPlaying ? 0.0 : 1.0)
-            .allowsHitTesting(!engine.isPlaying)
-            
-            Spacer().frame(height: 20)
-            
-            // WPM Control
-            HStack {
-                Text("\(displayedWPM)")
-                    .font(StrobeTheme.bodyFont(size: 24, bold: true))
-                    .foregroundStyle(StrobeTheme.accent)
-                    .frame(width: 80)
 
-                Text("wpm")
-                    .font(StrobeTheme.bodyFont(size: 14))
-                    .foregroundStyle(StrobeTheme.textSecondary)
-                    .padding(.bottom, 4)
-                
-                Slider(value: $wpmSliderValue, in: ReaderSettings.wpmRange, step: ReaderSettings.wpmStep) { editing in
-                    isAdjustingWPM = editing
-                    if !editing {
-                        applyWPM(Int(wpmSliderValue), withHaptic: true)
-                    }
-                }
-                .tint(StrobeTheme.accent)
-                .frame(minHeight: 44)
-                .accessibilityLabel("Words per minute")
-                .accessibilityValue("\(displayedWPM) words per minute")
+            Text(document.title)
+                .font(StrobeTheme.displayFont(size: 17, relativeTo: .headline))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity)
+                // The completion card shows the title itself.
+                .opacity(showCompletion ? 0 : 1)
+                .accessibilityAddTraits(.isHeader)
+
+            ReaderGlassButton(systemImage: "text.alignleft", accessibilityLabel: "View Text") {
+                showPassage = true
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
-            .background(StrobeTheme.surface.opacity(0.8))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal)
-            .opacity(engine.isPlaying ? 0.0 : 1.0)
-            // Zero opacity does not disable hit testing — without this, taps
-            // during playback land on the invisible slider instead of the
-            // gesture layer (and can silently change the reading speed).
-            .allowsHitTesting(!engine.isPlaying)
+            .accessibilityHint("Shows the full passage with your current word highlighted")
         }
-        .animation(.easeInOut(duration: navFadeDuration), value: engine.isPlaying)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        VStack(spacing: 16) {
+        let paceFactor = ReadingPace.shared.factor(for: document)
+
+        return VStack(spacing: 0) {
             if !document.chapters.isEmpty {
                 ChapterNavigationView(
                     chapters: document.chapters,
                     engine: engine,
+                    wordsPerMinute: displayedWPM,
+                    paceFactor: paceFactor,
+                    furthestWordIndex: document.displayedFurthestWordIndex,
                     showChapterPicker: $showChapterPicker
                 ) {
                     if showCompletion {
                         withAnimation { showCompletion = false }
                     }
                 }
+                .padding(.bottom, 22)
             }
 
-            ProgressScrubberView(
+            ReaderProgressView(
                 engine: engine,
-                isBarScrubbing: $isBarScrubbing,
+                wordsPerMinute: displayedWPM,
+                paceFactor: paceFactor,
                 showCompletion: $showCompletion
             )
 
             Text(hintText)
-                .font(StrobeTheme.bodyFont(size: 14))
-                .foregroundStyle(StrobeTheme.textSecondary)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
                 #if os(iOS)
                 .multilineTextAlignment(.center)
-                // Hold to Read's hint takes two lines. They stay reserved
-                // while "Seeking..." stands in, so the progress bar above
-                // doesn't jump under the finger dragging it.
+                // Hold to Read's hint takes two lines, kept while the
+                // completion card hides it so nothing above it moves.
                 .lineLimit(2, reservesSpace: holdToReadEnabled)
                 #endif
-                .padding(.bottom, 8)
+                .opacity(showCompletion ? 0 : 1)
+                .padding(.top, 20)
         }
         .padding(.horizontal, 24)
-        .padding(.bottom, 20)
+        .padding(.bottom, 12)
         .constrainedAndCentered(maxWidth: controlsMaxWidth)
+    }
+
+    /// The reading speed: the value over a slider from slow to fast. Neutral,
+    /// so the red stays with the progress bar and the word.
+    private var speedControl: some View {
+        VStack(spacing: 2) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Speed")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                Text("\(displayedWPM) wpm")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+            }
+            .font(StrobeTheme.metadataFont)
+            .accessibilityHidden(true)
+
+            // Continuous, rounding to steps itself: a stepped slider marks
+            // each of the 91 steps with a tick on iOS 26 and later.
+            Slider(value: steppedWPMSliderValue, in: ReaderSettings.wpmRange) {
+                Text("Speed")
+            } minimumValueLabel: {
+                Image(systemName: "tortoise.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            } maximumValueLabel: {
+                Image(systemName: "hare.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            } onEditingChanged: { editing in
+                isAdjustingWPM = editing
+                if !editing {
+                    applyWPM(Int(wpmSliderValue), withHaptic: true)
+                }
+            }
+            .tint(.white)
+            .frame(minHeight: 44)
+            .accessibilityLabel("Speed")
+            .accessibilityValue("\(displayedWPM) words per minute")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    nudgeSpeed(by: Int(ReaderSettings.wpmStep))
+                case .decrement:
+                    nudgeSpeed(by: -Int(ReaderSettings.wpmStep))
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    /// The speed slider's value, held to whole `wpmStep`s.
+    private var steppedWPMSliderValue: Binding<Double> {
+        Binding(
+            get: { wpmSliderValue },
+            set: { wpmSliderValue = ($0 / ReaderSettings.wpmStep).rounded() * ReaderSettings.wpmStep }
+        )
     }
 
     // MARK: - Completion view
 
+    /// The end of the document, laid out like its book page: the cover, the
+    /// title, and what to do next.
     private var completionView: some View {
-        VStack(spacing: 24) {
-            ZStack {
-                Circle()
-                    .fill(StrobeTheme.accent.opacity(0.2))
-                    .frame(width: 100, height: 100)
+        VStack(spacing: 0) {
+            DocumentCover(document: document)
+                .frame(width: 84)
+                .scaleEffect(reduceMotion ? 1 : (showCompletion ? 1 : 0.8))
+                .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.7), value: showCompletion)
+                .accessibilityHidden(true)
 
-                Image(systemName: "checkmark")
-                    .font(.system(size: 48, weight: .black))
-                    .foregroundStyle(StrobeTheme.accent)
-            }
-            .scaleEffect(reduceMotion ? 1 : (showCompletion ? 1 : 0.5))
-            .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.6), value: showCompletion)
+            Text("Finished")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(StrobeTheme.accent)
+                .padding(.top, 20)
 
-            VStack(spacing: 8) {
-                Text("Finished!")
-                    .font(StrobeTheme.titleFont(size: 32))
-                    .foregroundStyle(StrobeTheme.textPrimary)
+            Text(document.title)
+                .font(StrobeTheme.displayFont(size: 26, relativeTo: .title))
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .padding(.top, 4)
+                .accessibilityAddTraits(.isHeader)
 
-                Text(engine.words.count == 1 ? "1 word read" : "\(engine.words.count) words read")
-                    .font(StrobeTheme.bodyFont(size: 18))
-                    .foregroundStyle(StrobeTheme.textSecondary)
-            }
+            Text(engine.words.count == 1 ? "1 word" : "\(engine.words.count.formatted()) words")
+                .font(StrobeTheme.metadataFont)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
 
             HStack(spacing: 12) {
                 Button {
                     dismiss()
                 } label: {
                     Text("Done")
-                        .font(StrobeTheme.bodyFont(size: 16, bold: true))
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 16)
-                        .background(Color.white.opacity(0.08))
-                        .foregroundStyle(StrobeTheme.textPrimary)
-                        .clipShape(Capsule())
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
+                .tint(.white)
                 .accessibilityHint("Return to the previous screen")
 
                 Button {
@@ -837,22 +888,19 @@ struct ReaderView: View {
                     }
                     engine.restart()
                 } label: {
-                    Text("Read Again")
-                        .font(StrobeTheme.bodyFont(size: 16, bold: true))
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 16)
-                        .background(StrobeTheme.accent)
-                        .foregroundStyle(.white)
-                        .clipShape(Capsule())
+                    Label("Read Again", systemImage: "arrow.counterclockwise")
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderedProminent)
             }
-            .padding(.top, 16)
+            .font(.body.weight(.semibold))
+            .lineLimit(1)
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
+            .frame(maxWidth: 400)
+            .padding(.top, 24)
         }
-        .padding(40)
-        .background(StrobeTheme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 32))
-        .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+        .padding(.horizontal, 24)
     }
 
     // MARK: - Hint text
@@ -860,8 +908,6 @@ struct ReaderView: View {
     // The hint lives in the bottom bar, which is hidden during playback —
     // so only paused-state hints exist.
     private var hintText: String {
-        if showCompletion { return "Completed" }
-        if isBarScrubbing { return "Seeking..." }
         #if os(macOS)
         return holdSpeedAdjustEnabled
             ? "Press Space to read, arrows to scrub · click-drag up/down for speed"
@@ -1057,9 +1103,9 @@ private struct HoldSpeedReadoutView: View {
 
     var body: some View {
         Text("\(shownWPM) wpm")
-            .font(StrobeTheme.bodyFont(size: 14))
+            .font(.subheadline.weight(.medium))
             .monospacedDigit()
-            .foregroundStyle(StrobeTheme.textSecondary)
+            .foregroundStyle(.secondary)
             .opacity(isVisible ? 1 : 0)
             .task(id: engine.wpmOverride) {
                 guard let override = engine.wpmOverride else {
@@ -1090,8 +1136,8 @@ private struct HandsFreeLabelView: View {
 
     var body: some View {
         Text("Hands-free · tap to stop")
-            .font(StrobeTheme.bodyFont(size: 14))
-            .foregroundStyle(StrobeTheme.textSecondary)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
             .opacity(isVisible && engine.chapterAnnouncement == nil ? 1 : 0)
             .task(id: start) {
                 guard start > 0 else { return }
@@ -1107,64 +1153,65 @@ private struct HandsFreeLabelView: View {
     }
 }
 
-/// The "n / total" counter in the top bar.
-private struct WordCounterView: View {
+/// The reading position on the library's progress bar, with the share read
+/// and the time left under it. Pressing anywhere on it seeks there, and the
+/// bar thickens while it's held. VoiceOver adjusts it in 1% steps.
+private struct ReaderProgressView: View {
     let engine: RSVPEngine
-
-    var body: some View {
-        Text("\(engine.currentIndex + 1) / \(engine.words.count)")
-            .font(StrobeTheme.bodyFont(size: 12))
-            .foregroundStyle(StrobeTheme.textSecondary)
-    }
-}
-
-/// The progress bar with drag-to-seek and VoiceOver adjustment.
-private struct ProgressScrubberView: View {
-    let engine: RSVPEngine
-    @Binding var isBarScrubbing: Bool
+    /// The speed the time left is worked out at: the slider's while it's
+    /// dragged, so the time follows it.
+    let wordsPerMinute: Int
+    let paceFactor: Double?
     @Binding var showCompletion: Bool
+    @State private var isScrubbing = false
+    @State private var width: CGFloat = 0
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(StrobeTheme.surface)
-                    .frame(height: 6)
+        let progress = engine.progress
+        // As in the library, past the first word it never reads 0%.
+        let percent = progress > 0 ? max(1, Int(progress * 100)) : 0
+        let remainingWords = max(0, engine.words.count - 1 - engine.currentIndex)
+        let minutesLeft = remainingWords > 0
+            ? ReadingTime.minutes(words: remainingWords, wordsPerMinute: wordsPerMinute, paceFactor: paceFactor ?? 1)
+            : nil
 
-                Capsule()
-                    .fill(StrobeTheme.accent)
-                    .frame(width: geo.size.width * engine.progress, height: 6)
+        VStack(spacing: 10) {
+            ReadingProgressBar(progress: progress, height: isScrubbing ? 8 : 4)
+                .frame(height: 8)
 
-                // Thumb
-                Circle()
-                    .fill(.white)
-                    .frame(width: 16, height: 16)
-                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
-                    .offset(x: (geo.size.width * engine.progress) - 8)
-            }
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if engine.isPlaying { engine.pause() }
-                        isBarScrubbing = true
-                        if showCompletion {
-                            withAnimation { showCompletion = false }
-                        }
-                        let pct = max(0, min(value.location.x / geo.size.width, 1))
-                        let target = Int(pct * Double(engine.words.count - 1))
-                        engine.seek(to: target)
-                    }
-                    .onEnded { _ in
-                        isBarScrubbing = false
-                    }
-            )
+            ReaderProgressLabels(percent: percent, minutesLeft: minutesLeft)
         }
-        .frame(height: 44)
-        .accessibilityElement()
+        // The labels take presses too, which makes a target taller than the
+        // bar alone.
+        .padding(.top, 8)
+        .contentShape(Rectangle())
+        .background {
+            GeometryReader { geo in
+                Color.clear.onChange(of: geo.size.width, initial: true) { _, newWidth in
+                    width = newWidth
+                }
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    guard width > 0 else { return }
+                    if engine.isPlaying { engine.pause() }
+                    isScrubbing = true
+                    if showCompletion {
+                        withAnimation { showCompletion = false }
+                    }
+                    let fraction = max(0, min(value.location.x / width, 1))
+                    engine.seek(to: Int(fraction * Double(engine.words.count - 1)))
+                }
+                .onEnded { _ in
+                    isScrubbing = false
+                }
+        )
+        .animation(.easeOut(duration: 0.15), value: isScrubbing)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Reading progress")
-        .accessibilityValue("\(Int(engine.progress * 100)) percent, word \(engine.currentIndex + 1) of \(engine.words.count)")
+        .accessibilityValue(accessibilityValue(percent: percent, minutesLeft: minutesLeft))
         .accessibilityAdjustableAction { direction in
             // Step ~1% per adjustment — single-word steps made the scrubber
             // unusable with VoiceOver on book-length documents.
@@ -1181,5 +1228,34 @@ private struct ProgressScrubberView: View {
                 showCompletion = false
             }
         }
+    }
+
+    private func accessibilityValue(percent: Int, minutesLeft: Int?) -> String {
+        var parts = ["\(percent) percent", "word \(engine.currentIndex + 1) of \(engine.words.count)"]
+        if let minutesLeft {
+            parts.append("\(ReadingTime.spokenLabel(minutes: minutesLeft)) left")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// The share read and the time left under the progress bar. A view of
+/// plain values, so the time is formatted when one of them changes rather
+/// than on every word.
+private struct ReaderProgressLabels: View {
+    let percent: Int
+    let minutesLeft: Int?
+
+    var body: some View {
+        HStack {
+            Text(verbatim: "\(percent)%")
+            Spacer(minLength: 12)
+            if let minutesLeft {
+                Text("\(ReadingTime.label(minutes: minutesLeft)) left")
+            }
+        }
+        .font(StrobeTheme.metadataFont)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
     }
 }

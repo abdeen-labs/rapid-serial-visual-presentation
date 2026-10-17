@@ -44,10 +44,10 @@
     font-size: var(--headline); line-height: 1.06; letter-spacing: -.008em; word-spacing: .04em;
   }
   h1 .o { color: var(--red); }
-  .rule { margin-top: var(--gap2); width: var(--rule); height: calc(var(--u) * 1.3); background: rgba(244,236,225,.35); }
+  .rule { margin-top: var(--gap2); width: var(--rule); height: var(--ruleHeight); background: rgba(244,236,225,.35); }
   .sub {
-    margin-top: var(--gap2); max-width: var(--subWidth);
-    font: 400 var(--subtitle)/1.45 "Inter"; letter-spacing: -.01em;
+    margin-top: var(--gap3); max-width: var(--subWidth);
+    font: 400 var(--subtitle)/var(--subLine) "Inter"; letter-spacing: -.01em;
     color: rgba(244,236,225,.78);
   }
 
@@ -64,6 +64,34 @@
   }
   .screen { display: block; width: 100%; background: #050505; }
   .button { position: absolute; background: linear-gradient(to right, #2c2c2f, #19191b); border-radius: calc(var(--u) * 1.2); }
+  .button.right { background: linear-gradient(to left, #2c2c2f, #19191b); }
+
+  /* A lighter, brushed band lit from the top left, with a bright line along it. */
+  .body.metal {
+    background:
+      linear-gradient(to right, rgba(255,255,255,.055), rgba(0,0,0,0) 50%, rgba(0,0,0,.27)),
+      linear-gradient(#545456, #2a2a2b 20%, #1a1a1b 60%, #151516);
+    box-shadow:
+      0 calc(var(--u) * 30) calc(var(--u) * 80) rgba(0,0,0,.55),
+      0 0 calc(var(--u) * 40) rgba(0,0,0,.45),
+      0 calc(var(--u) * 6) calc(var(--u) * 16) rgba(0,0,0,.35);
+  }
+  .body.metal .button { background: linear-gradient(to right, #29292a, #232324); }
+  .body.metal .button.right { background: linear-gradient(to left, #29292a, #232324); }
+  .shine { position: absolute; pointer-events: none; border: solid rgba(255,255,255,.08); }
+
+  /* A finger holding the screen, on a track with the directions it can slide. */
+  .track {
+    position: absolute;
+    background: linear-gradient(rgba(255,255,255,0), rgba(255,255,255,.07) 25%, rgba(255,255,255,.07) 75%, rgba(255,255,255,0));
+  }
+  .chevron { position: absolute; border: solid rgba(255,255,255,.7); border-width: 0 0 var(--stroke) var(--stroke); }
+  .finger {
+    position: absolute; border-radius: 50%;
+    background: radial-gradient(circle at 50% 45%, #a8a8ac, #6a6a6e 70%, #4a4a4e);
+    border: var(--stroke) solid rgba(255,255,255,.85);
+    box-shadow: 0 0 calc(var(--stroke) * 12) rgba(255,255,255,.35);
+  }
 
   /* The fold: a hinge in the frame's edge, and a faint crease across the screen. */
   .hinge { position: absolute; background: linear-gradient(#26262a, #0e0e10); }
@@ -103,7 +131,11 @@ window.compose = async (shot) => {
   set("subWidth", L.subWidth * u + "px");
   set("gap1", L.gap1 * u + "px");
   set("gap2", L.gap2 * u + "px");
+  // Between the rule and the subtitle; the gap above the rule unless set.
+  set("gap3", (L.gap3 ?? L.gap2) * u + "px");
   set("rule", L.rule * u + "px");
+  set("ruleHeight", (L.ruleHeight ?? 1.3) * u + "px");
+  set("subLine", L.subLine ?? 1.45);
 
   document.getElementById("eyebrow").textContent = shot.eyebrow;
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -160,6 +192,41 @@ window.compose = async (shot) => {
       // Folded: the hinge is the outer screen's left edge.
       add("hinge", { left: -2.6 * pt + "px", top: 18 * pt + "px", bottom: 18 * pt + "px", width: 3.4 * pt + "px", borderRadius: 2 * pt + "px",
         background: "linear-gradient(to right, #121214, #2e2e32 60%, #1a1a1c)" });
+    }
+    if (D.screenBorder) {
+      // A spread shadow follows the screen's corners.
+      img.style.boxShadow = `0 0 0 ${D.screenBorder * pt}px #000`;
+    }
+    if (D.metal) {
+      body.classList.add("metal");
+      // The bright line runs through the middle of the band outside the border.
+      const band = D.bezel - (D.screenBorder ?? 0);
+      const inset = band * 0.43 * pt, line = band * 0.25 * pt;
+      add("shine", { inset: inset + "px", borderWidth: line + "px", borderRadius: rad(D.radii, D.bezel - band * 0.45) });
+    }
+    for (const b of D.buttons ?? []) {
+      const el = document.createElement("div");
+      el.className = "button " + b.side;
+      Object.assign(el.style, {
+        [b.side]: -D.buttonDepth * pt + "px", top: b.top * pt + "px",
+        width: D.buttonDepth * pt + "px", height: b.height * pt + "px",
+      });
+      body.insertBefore(el, img);
+    }
+    if (shot.overlay?.kind === "holdDrag") {
+      // Points on the screen, which starts a bezel in from the frame.
+      const O = shot.overlay;
+      const at = (v) => bezel + v * pt + "px";
+      const trackW = 48 * pt, fingerD = 74 * pt, chevron = 11 * pt;
+      body.style.setProperty("--stroke", 1.6 * pt + "px");
+      add("track", { left: `calc(${at(O.x)} - ${trackW / 2}px)`, top: at(O.top), width: trackW + "px",
+        height: (O.bottom - O.top) * pt + "px", borderRadius: trackW / 2 + "px" });
+      for (const [y, turn] of [[O.top + 22, 135], [O.bottom - 22, -45]]) {
+        add("chevron", { left: `calc(${at(O.x)} - ${chevron / 2}px)`, top: `calc(${at(y)} - ${chevron / 2}px)`,
+          width: chevron + "px", height: chevron + "px", transform: `rotate(${turn}deg)` });
+      }
+      add("finger", { left: `calc(${at(O.x)} - ${fingerD / 2}px)`, top: `calc(${at(O.finger)} - ${fingerD / 2}px)`,
+        width: fingerD + "px", height: fingerD + "px" });
     }
     row.appendChild(body);
   }

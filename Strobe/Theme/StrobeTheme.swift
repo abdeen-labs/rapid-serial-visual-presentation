@@ -21,26 +21,6 @@ struct StrobeTheme {
 
     // MARK: - Typography
 
-    /// Returns the Fraunces title font. By default the size scales with Dynamic Type
-    /// relative to `.title2`. Pass `relativeTo: nil` to opt out of scaling for
-    /// layouts where a fixed size is essential (e.g. the RSVP word display).
-    static func titleFont(size: CGFloat, relativeTo style: Font.TextStyle? = .title2) -> Font {
-        if let style {
-            return .custom("Fraunces-Bold", size: size, relativeTo: style)
-        }
-        return .custom("Fraunces-Bold", size: size)
-    }
-
-    /// Returns the Space Grotesk body font. By default the size scales with Dynamic
-    /// Type relative to `.body`. Pass `relativeTo: nil` to opt out for fixed-size layouts.
-    static func bodyFont(size: CGFloat, bold: Bool = false, relativeTo style: Font.TextStyle? = .body) -> Font {
-        let name = bold ? "SpaceGrotesk-Light_Bold" : "SpaceGrotesk-Light_Regular"
-        if let style {
-            return .custom(name, size: size, relativeTo: style)
-        }
-        return .custom(name, size: size)
-    }
-
     /// Fraunces SemiBold for book titles and headlines outside the reader,
     /// scaling with Dynamic Type relative to `style`.
     static func displayFont(size: CGFloat, relativeTo style: Font.TextStyle) -> Font {

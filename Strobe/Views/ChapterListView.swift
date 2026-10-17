@@ -321,9 +321,10 @@ struct ChapterListView: View {
     }
 }
 
-/// One chapter on the book page: its title, its length at the document's
-/// speed, and where the reader stands in it.
-private struct ChapterRow: View {
+/// One chapter on the book page and in the reader's chapter list: its
+/// title, its length at the document's speed, and where the reader stands
+/// in it.
+struct ChapterRow: View {
     enum ReadState: Equatable {
         /// The chapter holding the resume position, `fraction` of the way in.
         case current(fraction: Double)
@@ -419,7 +420,7 @@ private struct ChapterProgressRing: View {
 }
 
 /// Highlights a chapter row while it's pressed.
-private struct ChapterRowButtonStyle: ButtonStyle {
+struct ChapterRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(configuration.isPressed ? Color.white.opacity(0.08) : Color.clear)

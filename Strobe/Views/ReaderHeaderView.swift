@@ -105,7 +105,7 @@ private struct ReaderHeaderLine: View, Equatable {
 
     var body: some View {
         Text(text)
-            .font(StrobeTheme.bodyFont(size: 12, bold: bold, relativeTo: .caption))
+            .font(bold ? .caption.weight(.semibold) : .caption)
             .foregroundStyle(tone.fadedTextColor)
             .lineLimit(1)
             .truncationMode(.tail)
