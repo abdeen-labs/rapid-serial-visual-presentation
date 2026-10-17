@@ -158,9 +158,11 @@ final class Document {
     /// after navigating backward (chapter peek, passage tap, scrubbing,
     /// "Read Again") must not erase display progress. The outgoing
     /// `currentWordIndex` is folded in so documents saved before the marker
-    /// existed adopt their old position as the floor.
-    func recordPosition(currentIndex: Int, wordsPerMinute: Int, touchLastReadDate: Bool) {
-        furthestWordIndex = max(furthestWordIndex, currentWordIndex, currentIndex)
+    /// existed adopt their old position as the floor. `furthestIndex` is the
+    /// furthest word the reader played to while open, which can lie beyond
+    /// both positions after reading on and then going back.
+    func recordPosition(currentIndex: Int, furthestIndex: Int = 0, wordsPerMinute: Int, touchLastReadDate: Bool) {
+        furthestWordIndex = max(furthestWordIndex, currentWordIndex, currentIndex, furthestIndex)
         currentWordIndex = currentIndex
         self.wordsPerMinute = wordsPerMinute
         if touchLastReadDate {

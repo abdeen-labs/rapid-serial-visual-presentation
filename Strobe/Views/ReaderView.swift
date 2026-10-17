@@ -878,6 +878,7 @@ struct ReaderView: View {
         let engineIndex = engine.currentIndex
         document.recordPosition(
             currentIndex: engineIndex == savedEngineIndex ? document.currentWordIndex : engineIndex,
+            furthestIndex: engine.furthestPlayedIndex,
             // `applyWPM` writes speed changes to the document as they're
             // made; the document's value also keeps a speed synced from
             // another device while this reader was open.

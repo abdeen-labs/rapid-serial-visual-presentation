@@ -48,6 +48,13 @@ final class RSVPEngine {
     /// isn't observed.
     @ObservationIgnored private var playedWordCount = 0
 
+    /// The furthest word playback has moved to since the words were loaded,
+    /// so the document's furthest-read marker keeps what was read before
+    /// going back (scrubbing, "Read Again"). Seeking and scrubbing don't move
+    /// it: jumping ahead to look and coming back isn't reading. Nothing
+    /// displays it, so it isn't observed.
+    @ObservationIgnored private(set) var furthestPlayedIndex = 0
+
     /// The target reading speed. Changing this during playback reschedules the timer.
     var wordsPerMinute: Int {
         didSet { onPlaybackSettingChanged() }
@@ -201,6 +208,7 @@ final class RSVPEngine {
         self.words = words
         self.complexityScores = complexityScores
         self.currentIndex = words.isEmpty ? 0 : max(0, min(currentIndex, words.count - 1))
+        furthestPlayedIndex = 0
         lastAnnouncedIndex = nil
         setChapters(chapters)
     }
@@ -349,6 +357,7 @@ final class RSVPEngine {
                 // Another chapter can start where this one's heading ends.
                 // Otherwise the first word gets its full interval after the fade.
                 currentIndex = readingStart(ofChapterAt: chapter.wordIndex)
+                furthestPlayedIndex = max(furthestPlayedIndex, currentIndex)
                 if !announceChapterIfNeeded() { scheduleNextWord() }
             }
             return
@@ -364,6 +373,7 @@ final class RSVPEngine {
             }
             currentIndex += 1
             playedWordCount += 1
+            furthestPlayedIndex = max(furthestPlayedIndex, currentIndex)
             if !announceChapterIfNeeded() { scheduleNextWord(anchor: previousDeadline) }
         } else {
             pause()
