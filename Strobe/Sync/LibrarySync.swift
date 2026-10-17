@@ -117,6 +117,11 @@ final class LibrarySync: CKSyncEngineDelegate {
     /// write every book's words out for upload at once.
     private static let maxRecordsPerBatch = 200
     private static let maxAssetBytesPerBatch = 40_000_000
+    /// Words and scores of books new to this device taken in per save. A
+    /// fetched batch can hold a few hundred books, and SwiftData keeps what
+    /// one save stores in memory: measured with 100 books of 3.2 MB each,
+    /// one save kept 318 MB resident, while saving every 16 MB kept 24 MB.
+    private static let maxBookBytesPerSave = 16_000_000
     /// Skipped books fetched again per request. Each brings its words, and
     /// a request's are all held at once.
     private static let maxBooksPerRefetch = 20
@@ -1244,11 +1249,57 @@ final class LibrarySync: CKSyncEngineDelegate {
 
     /// Merges records fetched from iCloud (or returned by a conflict) into
     /// the store and saves them on the main context.
+    ///
+    /// Books new to this device are read and saved a few at a time
+    /// (`maxBookBytesPerSave`), each with its reading state, so a first sync
+    /// of a large library holds one save's worth of words rather than the
+    /// whole batch. Reading states of books already here and deletions
+    /// follow in a last save. Each save is whole on its own: a reconcile
+    /// between two of them sees books with their positions.
     private func applyRemoteChanges(records: [CKRecord], deletions: [CKRecord.ID], engine: CKSyncEngine) async {
         guard let context = container?.mainContext else { return }
         let books = records.filter { $0.recordType == CloudSyncSchema.RecordType.book }
         let states = records.filter { $0.recordType == CloudSyncSchema.RecordType.readingState }
+        let sizes = books.map(newBookBytes(of:))
 
+        var appliedStates = Set<CKRecord.ID>()
+        for range in BookContent.saveRanges(sizes: sizes, limit: Self.maxBookBytesPerSave) {
+            let chunk = Array(books[range])
+            let ids = Set(chunk.compactMap { CloudRecordKey(recordID: $0.recordID)?.documentID })
+            let chunkStates = states.filter { CloudRecordKey(recordID: $0.recordID).map { ids.contains($0.documentID) } ?? false }
+            appliedStates.formUnion(chunkStates.map(\.recordID))
+            guard await applyRemoteChangeSave(books: chunk, states: chunkStates, deletions: [], engine: engine, context: context) else { return }
+        }
+        let otherStates = states.filter { !appliedStates.contains($0.recordID) }
+        if !otherStates.isEmpty || !deletions.isEmpty {
+            await applyRemoteChangeSave(books: [], states: otherStates, deletions: deletions, engine: engine, context: context)
+        }
+    }
+
+    /// The bytes of words, scores, and chapters a book record brings, when
+    /// it's new to this device; 0 for a book already here, whose record
+    /// only updates its title.
+    private func newBookBytes(of record: CKRecord) -> Int {
+        guard let key = CloudRecordKey(recordID: record.recordID),
+              ledger.entry(for: key.documentID)?.hasLocalDocument != true else { return 0 }
+        return [CloudSyncSchema.BookField.words, CloudSyncSchema.BookField.complexity, CloudSyncSchema.BookField.chaptersAsset]
+            .compactMap { (record[$0] as? CKAsset)?.fileURL }
+            .compactMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+            .reduce(0, +)
+    }
+
+    /// Takes in some of a batch's records and saves them. Returns false when
+    /// the rest mustn't be applied: sync stopped or started over meanwhile,
+    /// or the save failed (the ledger is put back and everything is fetched
+    /// again).
+    @discardableResult
+    private func applyRemoteChangeSave(
+        books: [CKRecord],
+        states: [CKRecord],
+        deletions: [CKRecord.ID],
+        engine: CKSyncEngine,
+        context: ModelContext
+    ) async -> Bool {
         // Words of books new to this device, read off the main actor while
         // CloudKit's downloaded files still exist.
         var contents: [UUID: BookContent] = [:]
@@ -1264,7 +1315,7 @@ final class LibrarySync: CKSyncEngineDelegate {
             }.value
             // Sync stopped or started over meanwhile (an account change):
             // these records belong to a ledger that's gone.
-            guard engine === self.engine else { return }
+            guard engine === self.engine else { return false }
         }
 
         let documents: [Document]
@@ -1273,7 +1324,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         } catch {
             logger.error("Couldn't read the library to merge synced changes: \(error.localizedDescription, privacy: .public)")
             refetchEverything()
-            return
+            return false
         }
         let ledgerBefore = ledger
         var byID = Dictionary(documents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1299,7 +1350,7 @@ final class LibrarySync: CKSyncEngineDelegate {
                 ledger = ledgerBefore
                 logger.error("Couldn't save changes from iCloud: \(error.localizedDescription, privacy: .public)")
                 refetchEverything()
-                return
+                return false
             }
         }
         // Only now, with the store saved, do new books count as part of the
@@ -1308,6 +1359,7 @@ final class LibrarySync: CKSyncEngineDelegate {
             ledger.markLocal(id)
         }
         saveLedger()
+        return true
     }
 
     private func applyBook(

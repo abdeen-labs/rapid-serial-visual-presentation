@@ -446,4 +446,26 @@ nonisolated struct BookContent {
             .flatMap { try? JSONDecoder().decode([Chapter].self, from: $0) }
         return BookContent(words: words, complexity: complexity, chapters: chapters)
     }
+
+    /// Splits books, in order, into runs saved together: each run's `sizes`
+    /// add up to at most `limit`, except a single book larger than that,
+    /// which is saved on its own. Books of size 0 (already here) join the
+    /// run they fall in.
+    static func saveRanges(sizes: [Int], limit: Int) -> [Range<Int>] {
+        var ranges: [Range<Int>] = []
+        var start = 0
+        var total = 0
+        for (index, size) in sizes.enumerated() {
+            if index > start, size > 0, total + size > limit {
+                ranges.append(start..<index)
+                start = index
+                total = 0
+            }
+            total += size
+        }
+        if start < sizes.count {
+            ranges.append(start..<sizes.count)
+        }
+        return ranges
+    }
 }
