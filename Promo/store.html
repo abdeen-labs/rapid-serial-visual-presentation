@@ -1,0 +1,171 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Fraunces"; src: url("/Strobe/Fonts/Fraunces-Variable.ttf"); font-weight: 100 900; }
+  @font-face { font-family: "Inter"; src: url("/Strobe/Fonts/Inter-Regular.ttf"); font-weight: 400; }
+  @font-face { font-family: "Inter"; src: url("/Strobe/Fonts/Inter-Bold.ttf"); font-weight: 700; }
+
+  :root {
+    --ink: #F4ECE1;
+    --red: #FF3B30;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: var(--w); height: var(--h); overflow: hidden; background: #000; }
+
+  /* The page is a book cover: the tone, light from the top left, and a spine. */
+  .cover {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(to right, transparent 40%, rgba(0,0,0,.06)),
+      linear-gradient(to bottom,
+        rgba(255,255,255,.25) 0%, rgba(255,255,255,.13) 20%, rgba(255,255,255,.03) 40%,
+        rgba(0,0,0,.04) 50%, rgba(0,0,0,.19) 60%, rgba(0,0,0,.31) 70%,
+        rgba(0,0,0,.41) 80%, rgba(0,0,0,.49) 90%, rgba(0,0,0,.59) 100%),
+      var(--tone);
+  }
+  .spine {
+    position: absolute; top: 0; bottom: 0; left: 0; width: var(--spine);
+    background: rgba(0,0,0,.28);
+    box-shadow: calc(var(--u) * 0.6) 0 0 rgba(255,255,255,.08);
+  }
+
+  .copy { position: absolute; left: var(--margin); right: var(--margin); top: var(--top); color: var(--ink); }
+  .eyebrow {
+    font: 700 var(--eyebrow)/1 "Inter";
+    letter-spacing: .2em; text-transform: uppercase;
+    color: rgba(244,236,225,.55);
+  }
+  h1 {
+    margin-top: var(--gap1);
+    font-family: "Fraunces"; font-weight: 600;
+    font-variation-settings: "opsz" 144, "SOFT" 0, "WONK" 0;
+    font-size: var(--headline); line-height: 1.06; letter-spacing: -.008em; word-spacing: .04em;
+  }
+  h1 .o { color: var(--red); }
+  .rule { margin-top: var(--gap2); width: var(--rule); height: calc(var(--u) * 1.3); background: rgba(244,236,225,.35); }
+  .sub {
+    margin-top: var(--gap2); max-width: var(--subWidth);
+    font: 400 var(--subtitle)/1.45 "Inter"; letter-spacing: -.01em;
+    color: rgba(244,236,225,.78);
+  }
+
+  /* Device */
+  .devices { position: absolute; left: 0; right: 0; top: var(--deviceTop); display: flex; justify-content: center; align-items: center; }
+  .body {
+    position: relative;
+    background: linear-gradient(145deg, #3a3a3e, #1b1b1d 30%, #141416 70%, #2b2b2e);
+    box-shadow:
+      0 calc(var(--u) * 30) calc(var(--u) * 80) rgba(0,0,0,.55),
+      0 calc(var(--u) * 6) calc(var(--u) * 16) rgba(0,0,0,.35),
+      inset 0 0 0 calc(var(--u) * 1) rgba(255,255,255,.10),
+      inset 0 0 0 calc(var(--u) * 2.4) rgba(0,0,0,.6);
+  }
+  .screen { display: block; width: 100%; background: #050505; }
+  .button { position: absolute; background: linear-gradient(to right, #2c2c2f, #19191b); border-radius: calc(var(--u) * 1.2); }
+
+  /* The fold: a hinge in the frame's edge, and a faint crease across the screen. */
+  .hinge { position: absolute; background: linear-gradient(#26262a, #0e0e10); }
+  .crease { position: absolute; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="cover"></div>
+<div class="spine"></div>
+<div class="copy">
+  <div class="eyebrow" id="eyebrow"></div>
+  <h1 id="headline"></h1>
+  <div class="rule"></div>
+  <p class="sub" id="subtitle"></p>
+</div>
+<div class="devices" id="devices"></div>
+<script>
+// Called by store.js with one shot's settings. `headline` marks its red letter
+// with braces: "One w{o}rd\nat a time."
+window.compose = async (shot) => {
+  const r = document.documentElement.style;
+  const { w, h } = shot.size;
+  const landscape = w > h;
+  // One unit is a 1/1000 of the short side, so every size scales with the canvas.
+  const u = Math.min(w, h) / 1000;
+  const set = (k, v) => r.setProperty("--" + k, v);
+  set("w", w + "px"); set("h", h + "px"); set("u", u + "px");
+  set("tone", shot.tone);
+  set("spine", Math.round(u * (landscape ? 30 : 33)) + "px");
+
+  const L = shot.layout;
+  set("margin", L.margin * u + "px");
+  set("top", L.top * u + "px");
+  set("eyebrow", L.eyebrow * u + "px");
+  set("headline", L.headline * u + "px");
+  set("subtitle", L.subtitle * u + "px");
+  set("subWidth", L.subWidth * u + "px");
+  set("gap1", L.gap1 * u + "px");
+  set("gap2", L.gap2 * u + "px");
+  set("rule", L.rule * u + "px");
+
+  document.getElementById("eyebrow").textContent = shot.eyebrow;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  document.getElementById("headline").innerHTML = esc(shot.headline)
+    .replace(/\{(.+?)\}/g, '<span class="o">$1</span>')
+    .replace(/\n/g, "<br>");
+  document.getElementById("subtitle").textContent = shot.subtitle;
+
+  // Devices side by side, in screen points scaled to the canvas: the widest
+  // is `deviceW` wide and the others share its scale.
+  const row = document.getElementById("devices");
+  row.innerHTML = "";
+  row.style.gap = (L.deviceGap ?? 60) * u + "px";
+  set("deviceTop", L.deviceTop * u + "px");
+  const pt = (L.deviceW * u) / Math.max(...shot.devices.map((d) => d.spec.points.w));
+  const decodes = [];
+  for (const { spec: D, screen } of shot.devices) {
+    const bezel = D.bezel * pt;
+    const rad = (c, extra = 0) => c.map((x) => (x + extra) * pt + "px").join(" ");
+    const body = document.createElement("div");
+    body.className = "body";
+    body.style.padding = bezel + "px";
+    body.style.width = D.points.w * pt + 2 * bezel + "px";
+    body.style.borderRadius = rad(D.radii, D.bezel);
+    const img = document.createElement("img");
+    img.className = "screen";
+    img.style.borderRadius = rad(D.radii);
+    img.src = screen;
+    decodes.push(img.decode());
+    body.appendChild(img);
+    const add = (cls, css) => {
+      const el = document.createElement("div");
+      el.className = cls;
+      Object.assign(el.style, css);
+      body.appendChild(el);
+    };
+    if (D.fold === "horizontal") {
+      // Open and upright: the fold runs across the middle.
+      const y = `calc(${bezel}px + (100% - ${2 * bezel}px) / 2)`;
+      for (const side of ["left", "right"]) {
+        add("hinge", { [side]: -1.4 * pt + "px", top: `calc(${y} - ${7 * pt}px)`, width: 1.4 * pt + "px", height: 14 * pt + "px", borderRadius: pt + "px" });
+      }
+      add("crease", { left: bezel + "px", right: bezel + "px", top: `calc(${y} - ${3 * pt}px)`, height: 6 * pt + "px",
+        background: "linear-gradient(rgba(255,255,255,0), rgba(255,255,255,.035) 45%, rgba(0,0,0,.05) 55%, rgba(0,0,0,0))" });
+    } else if (D.fold === "vertical") {
+      // Open in landscape: the fold runs down the middle.
+      const x = `calc(${bezel}px + (100% - ${2 * bezel}px) / 2)`;
+      for (const side of ["top", "bottom"]) {
+        add("hinge", { [side]: -1.4 * pt + "px", left: `calc(${x} - ${7 * pt}px)`, height: 1.4 * pt + "px", width: 14 * pt + "px", borderRadius: pt + "px" });
+      }
+      add("crease", { top: bezel + "px", bottom: bezel + "px", left: `calc(${x} - ${3 * pt}px)`, width: 6 * pt + "px",
+        background: "linear-gradient(to right, rgba(255,255,255,0), rgba(255,255,255,.035) 45%, rgba(0,0,0,.05) 55%, rgba(0,0,0,0))" });
+    } else if (D.fold === "spine-left") {
+      // Folded: the hinge is the outer screen's left edge.
+      add("hinge", { left: -2.6 * pt + "px", top: 18 * pt + "px", bottom: 18 * pt + "px", width: 3.4 * pt + "px", borderRadius: 2 * pt + "px",
+        background: "linear-gradient(to right, #121214, #2e2e32 60%, #1a1a1c)" });
+    }
+    row.appendChild(body);
+  }
+  await Promise.all(decodes);
+  await document.fonts.ready;
+};
+</script>
+</body>
+</html>

@@ -135,6 +135,7 @@ struct PassageView: View {
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
+        .modifier(HorizontalSystemBars())
         #endif
         .focusable()
         .focusEffectDisabled()

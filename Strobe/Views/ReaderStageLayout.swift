@@ -38,6 +38,13 @@ struct ReaderStageLayout: Layout {
 
     var topInset: CGFloat
     var bottomInset: CGFloat
+    /// The band a folding screen's crease takes across the stage, measured
+    /// from the top of the bounds, while the system asks content to stay off
+    /// it (see `ReaderFold`). The word moves the least distance that clears it.
+    var foldBand: ClosedRange<CGFloat>? = nil
+    /// The height of the word itself, which is what has to clear the fold.
+    /// The fixation subview's frame is taller.
+    var wordHeight: CGFloat = 0
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         proposal.replacingUnspecifiedDimensions()
@@ -76,7 +83,9 @@ struct ReaderStageLayout: Layout {
                     bottomInset: bottomInset,
                     contentHeight: subview.sizeThatFits(fitting).height,
                     topBarHeight: topBarHeight,
-                    bottomBarHeight: bottomBarHeight
+                    bottomBarHeight: bottomBarHeight,
+                    foldBand: foldBand,
+                    wordHeight: wordHeight
                 )
             case .fixationSurround:
                 let fixation = subviews.first { $0[ReaderStageRoleKey.self] == .fixation }
@@ -86,7 +95,9 @@ struct ReaderStageLayout: Layout {
                     bottomInset: bottomInset,
                     contentHeight: fixation?.sizeThatFits(fitting).height ?? 0,
                     topBarHeight: topBarHeight,
-                    bottomBarHeight: bottomBarHeight
+                    bottomBarHeight: bottomBarHeight,
+                    foldBand: foldBand,
+                    wordHeight: wordHeight
                 )
                 proposal = ProposedViewSize(
                     width: bounds.width,
@@ -115,13 +126,19 @@ struct ReaderStageLayout: Layout {
     /// there, it moves the minimum distance that clears it; if it can't fit
     /// between the bars at all, it centers between them so the overlap is
     /// split evenly.
+    ///
+    /// A word of `wordHeight` that would sit on `foldBand` moves just above
+    /// or below it, whichever is nearer (above on a tie), as long as the
+    /// content still clears the bars there.
     nonisolated static func fixationCenterY(
         boundsHeight: CGFloat,
         topInset: CGFloat,
         bottomInset: CGFloat,
         contentHeight: CGFloat,
         topBarHeight: CGFloat,
-        bottomBarHeight: CGFloat
+        bottomBarHeight: CGFloat,
+        foldBand: ClosedRange<CGFloat>? = nil,
+        wordHeight: CGFloat = 0
     ) -> CGFloat {
         let containerHeight = topInset + boundsHeight + bottomInset
         let line = containerHeight * fixationFraction - topInset
@@ -134,7 +151,15 @@ struct ReaderStageLayout: Layout {
                 bottomBarHeight: bottomBarHeight
             )
         }
-        return min(max(line, highest), lowest)
+        let center = min(max(line, highest), lowest)
+        let half = wordHeight / 2
+        guard let foldBand, half > 0,
+              center + half > foldBand.lowerBound, center - half < foldBand.upperBound else {
+            return center
+        }
+        return [foldBand.lowerBound - half, foldBand.upperBound + half]
+            .filter { (highest...lowest).contains($0) }
+            .min { abs($0 - center) < abs($1 - center) } ?? center
     }
 
     /// How far content centered at `centerY` can reach both up and down
@@ -156,6 +181,32 @@ struct ReaderStageLayout: Layout {
         bottomBarHeight: CGFloat
     ) -> CGFloat {
         (topBarHeight + boundsHeight - bottomBarHeight) / 2
+    }
+}
+
+/// Where a folding screen's crease crosses the reader while the system asks
+/// content to stay off it: the iPhone Duo's inner screen, half open. Open
+/// flat, the fold is inactive and the reader spans it like any screen.
+struct ReaderFold {
+    /// The narrowest page the reader moves onto rather than span the fold.
+    static let minimumPageWidth: CGFloat = 320
+
+    /// A crease running down the screen: the reader keeps to the leading
+    /// page, this wide.
+    var pageWidth: CGFloat?
+    /// A crease running across the screen: the band it takes, measured from
+    /// the top of the proxy's frame.
+    var band: ClosedRange<CGFloat>?
+
+    init(_ geo: GeometryProxy) {
+        guard let fold = ScreenFold.crossing(geo) else { return }
+        if fold.runsDown {
+            if fold.frame.minX >= Self.minimumPageWidth {
+                pageWidth = fold.frame.minX
+            }
+        } else {
+            band = fold.frame.minY...fold.frame.maxY
+        }
     }
 }
 

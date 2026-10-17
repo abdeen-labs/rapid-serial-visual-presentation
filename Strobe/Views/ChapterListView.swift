@@ -21,16 +21,38 @@ struct ChapterListView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                header
-                chapterList
-                    .padding(.top, 32)
+        GeometryReader { geo in
+            if let spread = Self.spread(in: geo) {
+                // An open folding screen shows the book as a spread: the
+                // cover on the leading page and the chapters on the other.
+                HStack(spacing: 0) {
+                    ScrollView {
+                        header
+                            .padding(24)
+                            .frame(maxWidth: .infinity, minHeight: geo.size.height)
+                    }
+                    .frame(width: spread.leadingWidth)
+                    Spacer(minLength: spread.gap)
+                    ScrollView {
+                        chapterList
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 24)
+                    }
+                    .frame(width: spread.trailingWidth)
+                }
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        header
+                        chapterList
+                            .padding(.top, 32)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 32)
+                    .frame(maxWidth: 640)
+                    .frame(maxWidth: .infinity)
+                }
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 32)
-            .frame(maxWidth: 640)
-            .frame(maxWidth: .infinity)
         }
         .background { StrobeTheme.background.ignoresSafeArea() }
         .navigationTitle(document.title)
@@ -59,6 +81,25 @@ struct ChapterListView: View {
             dismiss()
             return .handled
         }
+    }
+
+    /// The two pages either side of a fold running down the screen, open
+    /// flat or half open, when both are wide enough for a page.
+    private struct Spread {
+        var leadingWidth: CGFloat
+        var gap: CGFloat
+        var trailingWidth: CGFloat
+    }
+
+    private static func spread(in geo: GeometryProxy) -> Spread? {
+        guard let fold = ScreenFold.crossing(geo, includeInactive: true), fold.runsDown else { return nil }
+        let spread = Spread(
+            leadingWidth: fold.frame.minX,
+            gap: fold.frame.width,
+            trailingWidth: geo.size.width - fold.frame.maxX
+        )
+        guard spread.leadingWidth >= 300, spread.trailingWidth >= 300 else { return nil }
+        return spread
     }
 
     // MARK: - Header

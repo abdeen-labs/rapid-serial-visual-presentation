@@ -177,6 +177,50 @@ struct ReaderLayoutTests {
         #expect(center + slot / 2 <= container.fullHeight)
     }
 
+    // MARK: - Folding screens
+
+    /// iPhone Duo's inner screen upright and half open: 951 pt tall, with a
+    /// 40 pt fold band across the middle.
+    private static let duoUpright = Container(boundsHeight: 951, topInset: 0, bottomInset: 0)
+    private static let duoFold: ClosedRange<CGFloat> = 455.5...495.5
+
+    private static func duoCenter(fontSize: CGFloat, fold: ClosedRange<CGFloat>? = duoFold) -> CGFloat {
+        ReaderStageLayout.fixationCenterY(
+            boundsHeight: duoUpright.boundsHeight,
+            topInset: 0,
+            bottomInset: 0,
+            contentHeight: wordSlotHeight(fontSize: fontSize),
+            topBarHeight: topBar,
+            bottomBarHeight: bottomBarWithChapters,
+            foldBand: fold,
+            wordHeight: fontSize * WordView.guideLineHeightRatio
+        )
+    }
+
+    @Test func wordMovesJustAboveAFoldItWouldSitOn() {
+        let fontSize: CGFloat = 56
+        let half = fontSize * WordView.guideLineHeightRatio / 2
+        let onLine = Self.duoCenter(fontSize: fontSize, fold: nil)
+        #expect(onLine + half > Self.duoFold.lowerBound)
+        #expect(Self.duoCenter(fontSize: fontSize) == Self.duoFold.lowerBound - half)
+    }
+
+    @Test func wordClearOfTheFoldStaysOnTheLine() {
+        let farFold: ClosedRange<CGFloat> = 800...840
+        #expect(Self.duoCenter(fontSize: 40, fold: farFold) == Self.duoCenter(fontSize: 40, fold: nil))
+    }
+
+    /// A fold the word can't clear without running into a bar leaves the
+    /// word where the bars put it.
+    @Test func wordStaysPutWhenNeitherSideOfTheFoldHasRoom() {
+        let center = ReaderStageLayout.fixationCenterY(
+            boundsHeight: 400, topInset: 0, bottomInset: 0,
+            contentHeight: 120, topBarHeight: 140, bottomBarHeight: 106,
+            foldBand: 160...240, wordHeight: 90
+        )
+        #expect(center == 200)
+    }
+
     // MARK: - Room around the word
 
     @Test func clearHalfHeightIsTheRoomToTheNearerBar() {

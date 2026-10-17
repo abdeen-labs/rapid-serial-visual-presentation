@@ -192,9 +192,12 @@ struct ReaderView: View {
             // The reader sits inside the safe area; the proxy's insets tell
             // the layout how far the screen extends beyond it.
             GeometryReader { geo in
+                let fold = ReaderFold(geo)
                 ReaderStageLayout(
                     topInset: geo.safeAreaInsets.top,
-                    bottomInset: geo.safeAreaInsets.bottom
+                    bottomInset: geo.safeAreaInsets.bottom,
+                    foldBand: fold.band,
+                    wordHeight: CGFloat(fontSize) * WordView.guideLineHeightRatio
                 ) {
                     topBar
                         .readerStageRole(.topBar)
@@ -272,6 +275,9 @@ struct ReaderView: View {
                         fadeDuration: navFadeDuration
                     )
                 }
+                // Half open with the fold down the middle, the reader keeps
+                // to the leading page. The gesture layer still spans both.
+                .frame(width: fold.pageWidth)
             }
             // The reader never hosts a keyboard; one dismissing from the
             // passage view's search must not move the fixation line.
@@ -280,6 +286,7 @@ struct ReaderView: View {
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
+        .modifier(HorizontalSystemBars())
         #elseif os(macOS)
         // The window toolbar's back button would sit beside the top bar's.
         // The toolbar stays, empty and transparent, so the window keeps its
@@ -944,6 +951,26 @@ private struct HidesWindowTitle: ViewModifier {
 #endif
 
 #if os(iOS)
+/// Keeps the system bars horizontal where they would otherwise run down a
+/// screen's edge (the folded iPhone Duo's outer screen). The reader and the
+/// passage view hide the status bar and draw their own bars, so a vertical
+/// bar would only reserve an empty column beside the text and push the word
+/// off center.
+struct HorizontalSystemBars: ViewModifier {
+    func body(content: Content) -> some View {
+        // Vertical bars arrived in the iOS 27.1 SDK.
+        #if canImport(SwiftUI, _version: 8.0.85.29)
+        if #available(iOS 27.1, *) {
+            content.toolbarVerticalBehavior(.disabled)
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 /// Calls `action` when a second finger joins a touch on the view. Counts
 /// the fingers with a `SpatialEventGesture` beside the view's own gestures,
 /// which needs iOS 18. Before that nothing counts them, and the reader
