@@ -93,7 +93,7 @@ struct WelcomeView: View {
                 ? WelcomeFeature(
                     symbol: "hand.tap",
                     title: "Hold to Read",
-                    detail: "Let go to pause. Swipe sideways to step through words."
+                    detail: "Let go to pause. Tap with two fingers to read hands-free. Swipe sideways to step through words."
                 )
                 : WelcomeFeature(
                     symbol: "hand.tap",

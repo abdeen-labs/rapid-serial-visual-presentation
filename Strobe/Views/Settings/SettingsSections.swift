@@ -317,9 +317,10 @@ struct ReadingControlsSection: View {
         guard holdToReadEnabled else {
             return "Tap the screen to start reading and tap again to pause."
         }
-        return holdSpeedAdjustEnabled
+        let hold = holdSpeedAdjustEnabled
             ? "Hold the screen to read and let go to pause. While holding, drag up or down to change speed."
             : "Hold the screen to read and let go to pause."
+        return hold + " To read hands-free, tap with two fingers; reading goes on until you tap again."
         #else
         return "While reading, click and drag up or down to change speed."
         #endif

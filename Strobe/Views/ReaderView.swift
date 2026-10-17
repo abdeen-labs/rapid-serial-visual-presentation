@@ -1,15 +1,18 @@
 import SwiftUI
 import SwiftData
-#if os(macOS)
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
 import AppKit
 #endif
 
 /// The RSVP reading interface — displays words one at a time.
 ///
 /// Gesture-driven: hold to play (or tap to toggle, when `holdToReadEnabled`
-/// is off), release to pause, swipe to scrub. Includes a WPM slider, chapter
-/// navigation (when chapters exist), progress bar scrubber, and completion
-/// overlay. Persists reading state on disappear and scene phase changes.
+/// is off), release to pause, swipe to scrub, two fingers to read hands-free
+/// (see ``ReaderTouch``). Includes a WPM slider, chapter navigation (when
+/// chapters exist), progress bar scrubber, and completion overlay. Persists
+/// reading state on disappear and scene phase changes.
 struct ReaderView: View {
     private let navFadeDuration: Double = 0.3
     private let playIntentDelay: TimeInterval = 0.12
@@ -41,8 +44,15 @@ struct ReaderView: View {
     @State private var engine: RSVPEngine
     @State private var isTouching = false
     @State private var scrubAccumulator: CGFloat = 0
-    @State private var touchMode: TouchMode = .undecided
+    @State private var touchMode: ReaderTouch.Mode = .undecided
     @State private var pendingPlayWorkItem: DispatchWorkItem?
+    /// Reading started by a second finger with Hold to Read on: it goes on
+    /// with nothing touching the screen, until any pause.
+    @State private var isHandsFree = false
+    /// True while the reader's drag is under way. It resets however the
+    /// drag finishes, but only a drag that ends normally reaches `onEnded`,
+    /// so a reset while `isTouching` is still set means SwiftUI cancelled it.
+    @GestureState private var isDragActive = false
     @State private var wpmSliderValue: Double
     @State private var isAdjustingWPM = false
     @State private var isBarScrubbing = false
@@ -172,6 +182,9 @@ struct ReaderView: View {
             Color.black.opacity(0.001)
                 .ignoresSafeArea()
                 .gesture(unifiedGesture)
+                #if os(iOS)
+                .modifier(SecondFingerDetector { secondFingerLanded() })
+                #endif
 
             // The reader sits inside the safe area; the proxy's insets tell
             // the layout how far the screen extends beyond it.
@@ -200,6 +213,13 @@ struct ReaderView: View {
                         // the readout appears.
                         .overlay {
                             HoldSpeedReadoutView(engine: engine)
+                                .offset(y: CGFloat(fontSize) * 1.4)
+                                .accessibilityHidden(true)
+                        }
+                        // Hidden while a finger is down: the touch is a hold
+                        // then, or the tap that stops reading.
+                        .overlay {
+                            HandsFreeLabelView(engine: engine, isShown: isHandsFree && !isTouching)
                                 .offset(y: CGFloat(fontSize) * 1.4)
                                 .accessibilityHidden(true)
                         }
@@ -301,7 +321,15 @@ struct ReaderView: View {
                 withAnimation { showCompletion = false }
             }
         }
+        .onChange(of: isDragActive) { _, isActive in
+            // The drag finished without reaching `onEnded`, which clears
+            // `isTouching`: SwiftUI cancelled it.
+            if !isActive && isTouching { touchWasCancelled() }
+        }
         .onChange(of: engine.isPlaying) { wasPlaying, isNowPlaying in
+            // Any pause ends hands-free reading: a tap, Space, the scene
+            // going inactive, the last word.
+            if !isNowPlaying { isHandsFree = false }
             if wasPlaying && !isNowPlaying && engine.isAtEnd {
                 HapticManager.shared.completedReading()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
@@ -407,12 +435,6 @@ struct ReaderView: View {
         }
     }
 
-    private enum TouchMode {
-        case undecided
-        case reading
-        case scrubbing
-    }
-
     /// True while any focus-stealing presentation is up. Used to restore
     /// keyboard focus when the last one closes.
     private var isPresentingOverlay: Bool {
@@ -423,6 +445,7 @@ struct ReaderView: View {
 
     private var unifiedGesture: some Gesture {
         DragGesture(minimumDistance: 0)
+            .updating($isDragActive) { _, isActive, _ in isActive = true }
             .onChanged { value in
                 guard !showCompletion else { return }
                 let horizontal = abs(value.translation.width)
@@ -488,36 +511,97 @@ struct ReaderView: View {
                 }
             }
             .onEnded { _ in
-                let wasScrubbing = touchMode == .scrubbing
-                isTouching = false
-                cancelPlayIntent()
-                // pause() clears the override; this covers the not-playing
-                // edge case (e.g. the document ended mid-hold).
-                engine.wpmOverride = nil
-                if holdToReadEnabled {
-                    if engine.isPlaying {
-                        engine.pause()
-                        HapticManager.shared.playPause()
-                    }
-                } else if !wasScrubbing && !showCompletion {
-                    // Tap-to-toggle mode: a release without a horizontal swipe
-                    // counts as a tap. Toggle playback.
-                    if engine.isPlaying {
-                        engine.pause()
-                        HapticManager.shared.playPause()
-                    } else if engine.isAtEnd {
-                        // A tap at the last word can't start playback — show
-                        // the completion card rather than a false "playing"
-                        // haptic with no visible change.
-                        showCompletionOverlay()
-                    } else {
-                        engine.play()
-                        HapticManager.shared.playPause()
-                    }
-                }
-                scrubAccumulator = 0
-                touchMode = .undecided
+                let endedMode = touchMode
+                endTouch()
+                apply(ReaderTouch.release(of: endedMode, in: touchSituation))
             }
+    }
+
+    /// Clears what a touch set up, however it finished.
+    private func endTouch() {
+        isTouching = false
+        cancelPlayIntent()
+        // pause() clears the override; this covers the not-playing
+        // edge case (e.g. the document ended mid-hold).
+        engine.wpmOverride = nil
+        scrubAccumulator = 0
+        touchMode = .undecided
+    }
+
+    /// A drag SwiftUI cancelled, which it does when a second finger lands
+    /// or the system takes the touch over, never reaches `onEnded`. Without
+    /// this, its state stays behind for the next touch to trip on.
+    private func touchWasCancelled() {
+        let cancelledMode = touchMode
+        endTouch()
+        apply(ReaderTouch.cancellation(
+            of: cancelledMode,
+            in: touchSituation,
+            detection: secondFingerDetection
+        ))
+    }
+
+    /// A second finger joined the touch: hands-free reading starts or
+    /// stops, or with Hold to Read off, the touch counts as a tap.
+    private func secondFingerLanded() {
+        let outcome = ReaderTouch.secondFinger(in: touchSituation)
+        guard outcome != .unchanged else { return }
+        cancelPlayIntent()
+        // The drag may carry on with the fingers. The rest of it changes
+        // nothing: no swipe or speed drag, and lifting doesn't pause.
+        if isTouching { touchMode = .twoFinger }
+        apply(outcome)
+    }
+
+    private var touchSituation: ReaderTouch.Situation {
+        ReaderTouch.Situation(
+            holdToRead: holdToReadEnabled,
+            isPlaying: engine.isPlaying,
+            isAtEnd: engine.isAtEnd,
+            isHandsFree: isHandsFree,
+            showsCompletion: showCompletion
+        )
+    }
+
+    private var secondFingerDetection: ReaderTouch.SecondFingerDetection {
+        #if os(iOS)
+        if #available(iOS 18.0, *) { return .counted }
+        return .inferredFromCancellation
+        #else
+        return .unavailable
+        #endif
+    }
+
+    private func apply(_ outcome: ReaderTouch.Outcome) {
+        switch outcome {
+        case .unchanged:
+            break
+        case .play:
+            engine.play()
+            HapticManager.shared.playPause()
+        case .pause:
+            engine.pause()
+            HapticManager.shared.playPause()
+        case .showCompletion:
+            showCompletionOverlay()
+        case .readHandsFree:
+            readHandsFree()
+        }
+    }
+
+    /// Starts reading with nothing holding the screen, or lets a hold's
+    /// reading carry on that way, until a tap or any other pause.
+    private func readHandsFree() {
+        // pause() clears a hold's speed drag; reading on, it's cleared here.
+        engine.wpmOverride = nil
+        engine.play()
+        // Nothing to read yet while the document loads.
+        guard engine.isPlaying else { return }
+        isHandsFree = true
+        HapticManager.shared.playPause()
+        #if os(iOS)
+        AccessibilityNotification.Announcement("Reading hands-free. Tap to stop.").post()
+        #endif
     }
 
     private func schedulePlayIntent() {
@@ -676,6 +760,13 @@ struct ReaderView: View {
             Text(hintText)
                 .font(StrobeTheme.bodyFont(size: 14))
                 .foregroundStyle(StrobeTheme.textSecondary)
+                #if os(iOS)
+                .multilineTextAlignment(.center)
+                // Hold to Read's hint takes two lines. They stay reserved
+                // while "Seeking..." stands in, so the progress bar above
+                // doesn't jump under the finger dragging it.
+                .lineLimit(2, reservesSpace: holdToReadEnabled)
+                #endif
                 .padding(.bottom, 8)
         }
         .padding(.horizontal, 24)
@@ -761,7 +852,8 @@ struct ReaderView: View {
             : "Press Space to read, arrows to scrub"
         #else
         guard holdToReadEnabled else { return "Tap to read" }
-        return holdSpeedAdjustEnabled ? "Hold to read · drag up/down for speed" : "Hold to read"
+        let hold = holdSpeedAdjustEnabled ? "Hold to read · drag up/down for speed" : "Hold to read"
+        return hold + "\nTwo-finger tap to read hands-free"
         #endif
     }
 
@@ -841,6 +933,38 @@ private struct HidesWindowTitle: ViewModifier {
 }
 #endif
 
+#if os(iOS)
+/// Calls `action` when a second finger joins a touch on the view. Counts
+/// the fingers with a `SpatialEventGesture` beside the view's own gestures,
+/// which needs iOS 18. Before that nothing counts them, and the reader
+/// takes a cancelled touch for a second finger instead (see
+/// ``ReaderTouch/SecondFingerDetection``).
+private struct SecondFingerDetector: ViewModifier {
+    let action: () -> Void
+    /// The most fingers down at once since the touch began. A gesture
+    /// state, so it goes back to zero however the touch finishes, and
+    /// passes two once per touch.
+    @GestureState private var peakTouchCount = 0
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .simultaneousGesture(
+                    SpatialEventGesture()
+                        .updating($peakTouchCount) { events, peak, _ in
+                            peak = max(peak, events.filter { $0.phase == .active }.count)
+                        }
+                )
+                .onChange(of: peakTouchCount) { old, new in
+                    if old < 2 && new >= 2 { action() }
+                }
+        } else {
+            content
+        }
+    }
+}
+#endif
+
 // MARK: - Per-tick child views
 //
 // These read `engine.currentIndex`/`currentWord`/`progress` in their own
@@ -907,6 +1031,33 @@ private struct HoldSpeedReadoutView: View {
                     return
                 }
                 shownWPM = override
+                withAnimation(.easeInOut(duration: 0.2)) { isVisible = true }
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 1)) { isVisible = false }
+            }
+    }
+}
+
+/// The note that reading has gone hands-free and how to stop it, so the
+/// two-finger touch explains itself. Fades out 2s after it's shown; hiding
+/// it fades it quickly. Steps aside for a chapter title, which it would run
+/// into. Isolates the announcement read.
+private struct HandsFreeLabelView: View {
+    let engine: RSVPEngine
+    let isShown: Bool
+    @State private var isVisible = false
+
+    var body: some View {
+        Text("Hands-free · tap to stop")
+            .font(StrobeTheme.bodyFont(size: 14))
+            .foregroundStyle(StrobeTheme.textSecondary)
+            .opacity(isVisible && engine.chapterAnnouncement == nil ? 1 : 0)
+            .task(id: isShown) {
+                guard isShown else {
+                    withAnimation(.easeInOut(duration: 0.2)) { isVisible = false }
+                    return
+                }
                 withAnimation(.easeInOut(duration: 0.2)) { isVisible = true }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
