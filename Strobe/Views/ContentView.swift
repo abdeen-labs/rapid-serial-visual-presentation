@@ -236,6 +236,11 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { StrobeTheme.background.ignoresSafeArea() }
+        #if os(macOS)
+        // With no grid scrolling under it, the window toolbar would draw
+        // its background as a bar over the empty state.
+        .toolbarBackground(displayedDocuments.isEmpty && !isProcessingImport ? .hidden : .automatic, for: .windowToolbar)
+        #endif
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             guard !providers.isEmpty else { return false }
             handleDrop(providers)
