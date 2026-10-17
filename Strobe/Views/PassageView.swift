@@ -14,6 +14,7 @@ struct PassageView: View {
     let engine: RSVPEngine
     @AppStorage(ReaderFont.storageKey) private var readerFontSelection = ReaderFont.defaultValue.rawValue
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
+    @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
 
     /// Whether the passage content is dominantly right-to-left script.
     /// Computed once at init — it drives the flow layout's direction, which
@@ -86,6 +87,10 @@ struct PassageView: View {
 
     private var textTone: ReaderTextTone {
         ReaderTextTone.resolve(readerTextToneSelection)
+    }
+
+    private var highlightColor: ReaderHighlightColor {
+        ReaderHighlightColor.resolve(readerHighlightColorSelection)
     }
 
     private var contentMaxWidth: CGFloat {
@@ -316,6 +321,7 @@ struct PassageView: View {
                                 currentMatchRange: currentMatchRange,
                                 font: readerFont,
                                 tone: textTone,
+                                highlight: highlightColor,
                                 onTap: handleWordTap
                             )
                             .id(idx)
@@ -670,6 +676,7 @@ private struct WordChunkView: View {
     let currentMatchRange: Range<Int>?
     let font: ReaderFont
     let tone: ReaderTextTone
+    let highlight: ReaderHighlightColor
     let onTap: (Int) -> Void
 
     var body: some View {
@@ -681,7 +688,8 @@ private struct WordChunkView: View {
                     isPrimaryMatch: currentMatchRange?.contains(i) ?? false,
                     isMatch: matchSet.contains(i),
                     font: font,
-                    tone: tone
+                    tone: tone,
+                    highlight: highlight
                 ) {
                     onTap(i)
                 }
@@ -692,8 +700,8 @@ private struct WordChunkView: View {
 }
 
 /// A single tappable word in the passage view. Visually conveys three states:
-/// the current reading position (red fill), the active search match (solid
-/// yellow), and any other search match (faded yellow).
+/// the current reading position (filled in the highlight color), the active
+/// search match (solid yellow), and any other search match (faded yellow).
 private struct WordToken: View {
     let text: String
     let isCurrent: Bool
@@ -701,6 +709,7 @@ private struct WordToken: View {
     let isMatch: Bool
     let font: ReaderFont
     let tone: ReaderTextTone
+    let highlight: ReaderHighlightColor
     let action: () -> Void
 
     var body: some View {
@@ -727,13 +736,13 @@ private struct WordToken: View {
     }
 
     private var textColor: Color {
-        if isCurrent { return .white }
+        if isCurrent { return tone.textColorOnAnchor(for: highlight) }
         if isPrimaryMatch { return .black }
         return tone.textColor
     }
 
     private var backgroundColor: Color {
-        if isCurrent { return tone.anchorColor }
+        if isCurrent { return tone.anchorColor(for: highlight) }
         if isPrimaryMatch { return Color.yellow.opacity(0.9) }
         if isMatch { return Color.yellow.opacity(0.28) }
         return .clear

@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The available color tones for the RSVP reader display.
 ///
-/// Each case pairs a word color with an ORP anchor color, so the anchor
-/// letter stays distinguishable from the rest of the word in every tone.
+/// Each case sets the word color, and each ``ReaderHighlightColor`` is tuned
+/// for it, so the ORP anchor letter stays distinguishable from the rest of
+/// the word in every tone.
 nonisolated enum ReaderTextTone: String, CaseIterable, Identifiable {
     /// The UserDefaults key used to persist the tone selection.
     static let storageKey = "readerTextTone"
@@ -39,15 +40,6 @@ nonisolated enum ReaderTextTone: String, CaseIterable, Identifiable {
         }
     }
 
-    var anchorRGB: UInt32 {
-        switch self {
-        case .bright: 0xFF453A
-        case .soft: 0xC8554D
-        case .sepia: 0xCC5A45
-        case .night: 0xA8402F
-        }
-    }
-
     /// How far `textColor` fades for quiet orientation text on the reading
     /// surface. Tuned per tone to land near 3:1 contrast against the reader
     /// background in each — one shared opacity would leave `night` illegible
@@ -76,8 +68,17 @@ nonisolated enum ReaderTextTone: String, CaseIterable, Identifiable {
     /// The color of the word being read.
     var textColor: Color { Self.color(textRGB) }
 
-    /// The color of the ORP anchor letter and its guide line.
-    var anchorColor: Color { Self.color(anchorRGB) }
+    /// The color of the ORP anchor letter and its guide line: the chosen
+    /// highlight color as tuned for this tone.
+    func anchorColor(for highlight: ReaderHighlightColor) -> Color {
+        Self.color(highlight.rgb(on: self))
+    }
+
+    /// The color of a word drawn on an `anchorColor(for:)` fill, like the
+    /// passage view's current word.
+    func textColorOnAnchor(for highlight: ReaderHighlightColor) -> Color {
+        highlight.prefersDarkText(on: self) ? .black : .white
+    }
 
     /// A low-contrast `textColor` for text that must never compete with the word.
     var fadedTextColor: Color { textColor.opacity(fadedTextOpacity) }

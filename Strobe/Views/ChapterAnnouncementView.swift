@@ -4,10 +4,12 @@ import SwiftUI
 struct ChapterAnnouncementView: View {
     let title: String
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
+    @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
 
     var body: some View {
         let parts = titleParts
         let tone = ReaderTextTone.resolve(readerTextToneSelection)
+        let highlight = ReaderHighlightColor.resolve(readerHighlightColorSelection)
 
         VStack(spacing: 14) {
             if let label = parts.label {
@@ -28,7 +30,7 @@ struct ChapterAnnouncementView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Capsule()
-                .fill(tone.anchorColor.opacity(0.8))
+                .fill(tone.anchorColor(for: highlight).opacity(0.8))
                 .frame(width: 24, height: 2)
                 .padding(.top, 8)
                 .accessibilityHidden(true)

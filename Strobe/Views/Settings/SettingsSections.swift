@@ -108,13 +108,14 @@ struct ReaderPreview: View {
     }
 }
 
-/// Speed, size, font, color, and background.
+/// Speed, size, font, colors, and background.
 struct ReadingAppearanceSection: View {
     @AppStorage(ReaderSettings.Keys.defaultWPM) private var defaultWPM: Int = ReaderSettings.Defaults.defaultWPM
     @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
     @AppStorage(ReaderSettings.Keys.trueBlackBackgroundEnabled) private var trueBlackBackgroundEnabled: Bool = ReaderSettings.Defaults.trueBlackBackgroundEnabled
     @AppStorage(ReaderFont.storageKey) private var readerFontSelection = ReaderFont.defaultValue.rawValue
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
+    @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
 
     var body: some View {
         Section {
@@ -147,7 +148,17 @@ struct ReadingAppearanceSection: View {
             .pickerStyle(.navigationLink)
             #endif
 
-            ToneRow(selection: $readerTextToneSelection, font: ReaderFont.resolve(readerFontSelection))
+            ToneRow(
+                selection: $readerTextToneSelection,
+                font: ReaderFont.resolve(readerFontSelection),
+                highlight: ReaderHighlightColor.resolve(readerHighlightColorSelection)
+            )
+
+            HighlightColorRow(
+                selection: $readerHighlightColorSelection,
+                font: ReaderFont.resolve(readerFontSelection),
+                tone: ReaderTextTone.resolve(readerTextToneSelection)
+            )
 
             Toggle(isOn: $trueBlackBackgroundEnabled) {
                 Text("True Black Background")
@@ -163,30 +174,77 @@ struct ReadingAppearanceSection: View {
 
 /// The text color choices, each drawn the way the reader draws a word: the
 /// name in the tone's color on the reader background, with the anchor
-/// letter in the tone's anchor color.
+/// letter in the chosen highlight color.
 private struct ToneRow: View {
     @Binding var selection: String
     let font: ReaderFont
+    let highlight: ReaderHighlightColor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Text Color")
             HStack(spacing: 8) {
                 ForEach(ReaderTextTone.allCases) { tone in
-                    toneButton(tone)
+                    ReaderSwatch(
+                        sample: ReaderSwatch.makeSample(tone.displayName, font: font, tone: tone, highlight: highlight),
+                        name: tone.displayName,
+                        isSelected: selection == tone.rawValue
+                    ) {
+                        selection = tone.rawValue
+                    }
                 }
             }
         }
         .padding(.vertical, 4)
         .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
     }
+}
 
-    private func toneButton(_ tone: ReaderTextTone) -> some View {
-        let isSelected = selection == tone.rawValue
-        return Button {
-            selection = tone.rawValue
-        } label: {
-            Text(sample(for: tone))
+/// The highlight color choices, each drawn on the current text color: the
+/// name in the tone's color on the reader background, with the anchor
+/// letter in that highlight color as tuned for the tone.
+private struct HighlightColorRow: View {
+    @Binding var selection: String
+    let font: ReaderFont
+    let tone: ReaderTextTone
+
+    /// One column per text color swatch, so the two rows of swatches line up.
+    private static let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 8),
+        count: ReaderTextTone.allCases.count
+    )
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Highlight Color")
+            LazyVGrid(columns: Self.columns, spacing: 8) {
+                ForEach(ReaderHighlightColor.allCases) { highlight in
+                    ReaderSwatch(
+                        sample: ReaderSwatch.makeSample(highlight.displayName, font: font, tone: tone, highlight: highlight),
+                        name: highlight.displayName,
+                        isSelected: selection == highlight.rawValue
+                    ) {
+                        selection = highlight.rawValue
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+    }
+}
+
+/// A reader color choice: a sample word on the reader background, outlined
+/// in the accent while selected.
+private struct ReaderSwatch: View {
+    let sample: AttributedString
+    let name: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(sample)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity)
@@ -205,19 +263,26 @@ private struct ToneRow: View {
         }
         // Each swatch keeps its own tap target inside the form row.
         .buttonStyle(.plain)
-        .accessibilityLabel(tone.displayName)
+        .accessibilityLabel(name)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
-    private func sample(for tone: ReaderTextTone) -> AttributedString {
-        var sample = AttributedString(tone.displayName)
+    /// `text` the way the reader draws a word: in the tone's color, with the
+    /// anchor letter bold in the highlight color.
+    static func makeSample(
+        _ text: String,
+        font: ReaderFont,
+        tone: ReaderTextTone,
+        highlight: ReaderHighlightColor
+    ) -> AttributedString {
+        var sample = AttributedString(text)
         sample.font = font.regularFont(size: 15)
         sample.foregroundColor = tone.textColor
 
-        let anchorOffset = WordView.orpLetterPosition(letterCount: tone.displayName.count)
+        let anchorOffset = WordView.orpLetterPosition(letterCount: text.count)
         let anchorStart = sample.index(sample.startIndex, offsetByCharacters: anchorOffset)
         let anchorEnd = sample.index(anchorStart, offsetByCharacters: 1)
-        sample[anchorStart..<anchorEnd].foregroundColor = tone.anchorColor
+        sample[anchorStart..<anchorEnd].foregroundColor = tone.anchorColor(for: highlight)
         sample[anchorStart..<anchorEnd].font = font.boldFont(size: 15)
         return sample
     }

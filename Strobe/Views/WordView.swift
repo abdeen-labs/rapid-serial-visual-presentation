@@ -10,7 +10,7 @@ import AppKit
 /// Displays a single word with Optimal Recognition Point (ORP) highlighting.
 ///
 /// The ORP anchor letter (approximately at the 1/3 position of the word's letters)
-/// is displayed in the tone's anchor color and centered on screen. The rest of the word is offset
+/// is displayed in the chosen highlight color and centered on screen. The rest of the word is offset
 /// so the reader's eye stays fixed at the center. Font size scales down
 /// automatically for very long words.
 ///
@@ -30,6 +30,7 @@ struct WordView: View, Equatable {
     var contextIsDimmed = false
     @AppStorage(ReaderFont.storageKey) private var readerFontSelection = ReaderFont.defaultValue.rawValue
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
+    @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
 
     static func == (lhs: WordView, rhs: WordView) -> Bool {
         lhs.word == rhs.word && lhs.fontSize == rhs.fontSize
@@ -37,6 +38,7 @@ struct WordView: View, Equatable {
             && lhs.contextIsDimmed == rhs.contextIsDimmed
             && lhs.readerFontSelection == rhs.readerFontSelection
             && lhs.readerTextToneSelection == rhs.readerTextToneSelection
+            && lhs.readerHighlightColorSelection == rhs.readerHighlightColorSelection
     }
 
     private var readerFont: ReaderFont {
@@ -45,6 +47,10 @@ struct WordView: View, Equatable {
 
     private var textTone: ReaderTextTone {
         ReaderTextTone.resolve(readerTextToneSelection)
+    }
+
+    private var highlightColor: ReaderHighlightColor {
+        ReaderHighlightColor.resolve(readerHighlightColorSelection)
     }
 
     /// Everything derived from `word` that the body needs, computed once per
@@ -82,7 +88,7 @@ struct WordView: View, Equatable {
         )
     }
 
-    /// The character index of the ORP anchor letter (the red letter).
+    /// The character index of the ORP anchor letter (the highlighted letter).
     /// Calculated from the positions of letters and digits, skipping
     /// punctuation and the space inside a number unit (`2000 BCE`), so a
     /// number or unit is anchored like a word of the same length.
@@ -145,10 +151,10 @@ struct WordView: View, Equatable {
         }
     }
 
-    /// Builds an `AttributedString` with the anchor letter in the tone's anchor color.
+    /// Builds an `AttributedString` with the anchor letter in `anchorColor`.
     /// For non-Arabic scripts the anchor is also bolded. For Arabic, only
     /// color is changed to avoid breaking cursive glyph connections.
-    private func attributedWord(fontSize: CGFloat, parts: WordParts) -> AttributedString {
+    private func attributedWord(fontSize: CGFloat, parts: WordParts, anchorColor: Color) -> AttributedString {
         var attributed = AttributedString(word)
         // The reader's font size is user-controlled via a slider, so we opt out
         // of Dynamic Type scaling here — otherwise accessibility sizes would
@@ -162,7 +168,7 @@ struct WordView: View, Equatable {
         let end = word.index(after: start)
         if let attrStart = AttributedString.Index(start, within: attributed),
            let attrEnd = AttributedString.Index(end, within: attributed) {
-            attributed[attrStart..<attrEnd].foregroundColor = textTone.anchorColor
+            attributed[attrStart..<attrEnd].foregroundColor = anchorColor
             // Bold breaks Arabic cursive shaping — only apply for non-Arabic.
             if !parts.isArabic {
                 attributed[attrStart..<attrEnd].font = readerFont.boldFont(size: fontSize, relativeTo: nil)
@@ -190,6 +196,7 @@ struct WordView: View, Equatable {
 
     var body: some View {
         let parts = makeParts()
+        let anchorColor = textTone.anchorColor(for: highlightColor)
         GeometryReader { geo in
             let metrics = layoutMetrics(for: geo.size.width, parts: parts)
 
@@ -197,12 +204,12 @@ struct WordView: View, Equatable {
                 ZStack {
                     // Subtle vertical guide line at the anchor position
                     Rectangle()
-                        .fill(textTone.anchorColor.opacity(0.12))
+                        .fill(anchorColor.opacity(0.12))
                         .frame(width: 1.5, height: metrics.fontSize * Self.guideLineHeightRatio)
 
                     let gap = metrics.fontSize * Self.contextGapRatio
 
-                    Text(attributedWord(fontSize: metrics.fontSize, parts: parts))
+                    Text(attributedWord(fontSize: metrics.fontSize, parts: parts, anchorColor: anchorColor))
                         // Overlays, so the neighbours never change the word's
                         // own layout. The guides must sit on unconditional
                         // views: an alignment guide inside an `if` is dropped.
