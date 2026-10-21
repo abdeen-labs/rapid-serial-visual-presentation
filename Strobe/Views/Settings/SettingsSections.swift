@@ -448,7 +448,7 @@ struct AboutSection: View {
             }
             .tint(.primary)
             externalLink("Rate Strobe", url: Self.writeReviewURL)
-            externalLink("Source Code", url: URL(string: "https://github.com/Cuzeth/Rapid-Serial-Visual-Presentation")!)
+            externalLink("Source Code", url: URL(string: "https://github.com/abdeen-labs/rapid-serial-visual-presentation")!)
         } footer: {
             Text(appVersionLabel)
         }

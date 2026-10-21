@@ -20,8 +20,8 @@
   <a href="https://strobefast.app">
     <img src="https://img.shields.io/badge/Website-strobefast.app-FF3B30?style=for-the-badge" alt="Website" />
   </a>
-  <a href="https://github.com/Cuzeth/Rapid-Serial-Visual-Presentation/actions/workflows/tests.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/Cuzeth/Rapid-Serial-Visual-Presentation/tests.yml?style=for-the-badge&label=Tests" alt="Tests" />
+  <a href="https://github.com/abdeen-labs/rapid-serial-visual-presentation/actions/workflows/tests.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/abdeen-labs/rapid-serial-visual-presentation/tests.yml?style=for-the-badge&label=Tests" alt="Tests" />
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-Apache_2.0-green?style=for-the-badge" alt="License" />
