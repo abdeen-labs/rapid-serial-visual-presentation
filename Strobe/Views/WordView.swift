@@ -28,6 +28,9 @@ struct WordView: View, Equatable {
     /// Whether the neighbours fade nearly into the background, as during
     /// playback, rather than staying readable.
     var contextIsDimmed = false
+    /// How the word pops in when it replaces the last one (see
+    /// ``WordPop``). Nil never pops.
+    var pop: WordPop.Cue? = nil
     @AppStorage(ReaderFont.storageKey) private var readerFontSelection = ReaderFont.defaultValue.rawValue
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
     @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
@@ -36,6 +39,7 @@ struct WordView: View, Equatable {
         lhs.word == rhs.word && lhs.fontSize == rhs.fontSize
             && lhs.context == rhs.context && lhs.contextIsRightToLeft == rhs.contextIsRightToLeft
             && lhs.contextIsDimmed == rhs.contextIsDimmed
+            && lhs.pop == rhs.pop
             && lhs.readerFontSelection == rhs.readerFontSelection
             && lhs.readerTextToneSelection == rhs.readerTextToneSelection
             && lhs.readerHighlightColorSelection == rhs.readerHighlightColorSelection
@@ -210,6 +214,9 @@ struct WordView: View, Equatable {
                     let gap = metrics.fontSize * Self.contextGapRatio
 
                     Text(attributedWord(fontSize: metrics.fontSize, parts: parts, anchorColor: anchorColor))
+                        // Before the overlays, so the neighbours hold still
+                        // while the word pops.
+                        .modifier(WordPopEffect(cue: pop, anchor: metrics.popAnchor))
                         // Overlays, so the neighbours never change the word's
                         // own layout. The guides must sit on unconditional
                         // views: an alignment guide inside an `if` is dropped.
@@ -251,6 +258,9 @@ struct WordView: View, Equatable {
     private struct LayoutMetrics {
         let fontSize: CGFloat
         let anchorOffset: CGFloat
+        /// The anchor letter's center within the word, which a pop scales
+        /// around.
+        var popAnchor: UnitPoint = .center
     }
 
     /// Computes the fitted font size and the ORP centering offset together.
@@ -290,7 +300,20 @@ struct WordView: View, Equatable {
             availableWidth: textAreaWidth
         )
 
-        return LayoutMetrics(fontSize: displayFontSize, anchorOffset: anchorOffset)
+        // A share of the width, so measuring at the base size serves the
+        // fitted word too.
+        let popAnchorX = WordPop.anchorX(
+            beforeWidth: beforeWidth,
+            anchorWidth: anchorWidth,
+            afterWidth: afterWidth,
+            isRightToLeft: parts.isArabic
+        )
+
+        return LayoutMetrics(
+            fontSize: displayFontSize,
+            anchorOffset: anchorOffset,
+            popAnchor: UnitPoint(x: popAnchorX, y: 0.5)
+        )
     }
 
     /// Clamps the ORP centering offset so the shifted word stays inside the

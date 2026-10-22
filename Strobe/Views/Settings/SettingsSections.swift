@@ -88,17 +88,31 @@ private func sliderBinding(_ value: Binding<Int>) -> Binding<Double> {
 // MARK: - Reading
 
 /// The word "Strobe" as the reader draws it, in the current font, size,
-/// color, and background, so appearance changes show as they're made.
+/// color, and background, so appearance changes show as they're made. It
+/// pops in once when Pop Words In turns on, at the default speed's pace.
 struct ReaderPreview: View {
+    @AppStorage(ReaderSettings.Keys.defaultWPM) private var defaultWPM: Int = ReaderSettings.Defaults.defaultWPM
     @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
+    @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Counts the times Pop Words In turned on, so each one pops the word.
+    @State private var popCount = 0
 
     var body: some View {
         WordView(
             word: "Strobe",
             fontSize: CGFloat(fontSize),
-            context: contextWordsEnabled ? ContextWords.Neighbors(previous: "read", next: "faster") : nil
+            context: contextWordsEnabled ? ContextWords.Neighbors(previous: "read", next: "faster") : nil,
+            pop: WordPop.Cue(
+                trigger: popCount,
+                style: wordPopEnabled ? WordPop.style(reduceMotion: reduceMotion) : .still,
+                duration: WordPop.duration(wordsPerMinute: defaultWPM)
+            )
         )
+        .onChange(of: wordPopEnabled) { _, isOn in
+            if isOn { popCount += 1 }
+        }
         .frame(maxWidth: .infinity)
         .background { ReaderBackdrop() }
         .clipShape(.rect(cornerRadius: 12, style: .continuous))
@@ -108,14 +122,16 @@ struct ReaderPreview: View {
     }
 }
 
-/// Speed, size, font, colors, and background.
+/// Speed, size, font, colors, background, and how words come in.
 struct ReadingAppearanceSection: View {
     @AppStorage(ReaderSettings.Keys.defaultWPM) private var defaultWPM: Int = ReaderSettings.Defaults.defaultWPM
     @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
     @AppStorage(ReaderSettings.Keys.trueBlackBackgroundEnabled) private var trueBlackBackgroundEnabled: Bool = ReaderSettings.Defaults.trueBlackBackgroundEnabled
+    @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
     @AppStorage(ReaderFont.storageKey) private var readerFontSelection = ReaderFont.defaultValue.rawValue
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
     @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Section {
@@ -163,6 +179,13 @@ struct ReadingAppearanceSection: View {
             Toggle(isOn: $trueBlackBackgroundEnabled) {
                 Text("True Black Background")
                 Text("Pure black behind the words, for reading in the dark")
+            }
+
+            Toggle(isOn: $wordPopEnabled) {
+                Text("Pop Words In")
+                Text(reduceMotion
+                     ? "With Reduce Motion on, each word fades in instead"
+                     : "Each word springs in as it appears, like video captions")
             }
         } header: {
             Text("Reading")

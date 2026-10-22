@@ -55,6 +55,12 @@ final class RSVPEngine {
     /// displays it, so it isn't observed.
     @ObservationIgnored private(set) var furthestPlayedIndex = 0
 
+    /// The display time the current word got when playback reached it, so
+    /// the word's pop can fit inside it (see ``WordPop``); nil before
+    /// playback times a word. Not observed: it changes with the word, which
+    /// views already follow.
+    @ObservationIgnored private(set) var currentWordInterval: TimeInterval?
+
     /// The target reading speed. Changing this during playback reschedules the timer.
     var wordsPerMinute: Int {
         didSet { onPlaybackSettingChanged() }
@@ -317,7 +323,9 @@ final class RSVPEngine {
     /// clamped to now so a long stall (app suspension) can't cause a burst of
     /// catch-up ticks.
     private func scheduleNextWord(anchor: DispatchTime? = nil) {
-        scheduleTimer(after: nextInterval(), anchor: anchor)
+        let interval = nextInterval()
+        currentWordInterval = interval
+        scheduleTimer(after: interval, anchor: anchor)
     }
 
     private func scheduleTimer(after interval: TimeInterval, anchor: DispatchTime? = nil) {

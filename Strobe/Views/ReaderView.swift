@@ -42,6 +42,7 @@ struct ReaderView: View {
     @AppStorage(ReaderSettings.Keys.holdSpeedAdjustEnabled) private var holdSpeedAdjustEnabled: Bool = ReaderSettings.Defaults.holdSpeedAdjustEnabled
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
+    @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
     @Bindable var document: Document
     @State private var engine: RSVPEngine
     @State private var isTouching = false
@@ -216,7 +217,8 @@ struct ReaderView: View {
                             engine: engine,
                             fontSize: CGFloat(fontSize),
                             showsContext: contextWordsEnabled,
-                            contextIsRightToLeft: isRightToLeftDocument
+                            contextIsRightToLeft: isRightToLeftDocument,
+                            popsWords: wordPopEnabled
                         )
                         .id("wordview") // stabilize identity
                         .transition(.opacity)
@@ -1064,18 +1066,29 @@ private struct CurrentWordView: View {
     let fontSize: CGFloat
     let showsContext: Bool
     let contextIsRightToLeft: Bool
+    /// Whether each new word pops in while playing (see ``WordPop``).
+    let popsWords: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let isWordShown = engine.chapterAnnouncement == nil && !engine.isInSentenceBreak
         WordView(
             word: engine.currentWord,
             fontSize: fontSize,
             context: showsContext ? ContextWords.neighbors(of: engine.currentIndex, in: engine.words) : nil,
             contextIsRightToLeft: contextIsRightToLeft,
-            contextIsDimmed: showsContext && engine.isPlaying
+            contextIsDimmed: showsContext && engine.isPlaying,
+            pop: popsWords ? WordPop.readerCue(
+                index: engine.currentIndex,
+                isShown: isWordShown,
+                isPlaying: engine.isPlaying,
+                reduceMotion: reduceMotion,
+                wordsPerMinute: engine.effectiveWordsPerMinute,
+                wordInterval: engine.currentWordInterval
+            ) : nil
         )
             .equatable()
-            .opacity(engine.chapterAnnouncement == nil && !engine.isInSentenceBreak ? 1 : 0)
+            .opacity(isWordShown ? 1 : 0)
             .animation(nil, value: engine.chapterAnnouncement != nil)
             .animation(nil, value: engine.isInSentenceBreak)
             // A sentence break leaves the word in the accessibility tree so

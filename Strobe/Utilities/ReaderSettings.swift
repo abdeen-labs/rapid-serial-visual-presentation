@@ -34,6 +34,7 @@ enum ReaderSettings {
         nonisolated static let enclosingMarksEnabled = "enclosingMarksEnabled"
         nonisolated static let enclosingMarksSize = "enclosingMarksSize"
         nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
+        nonisolated static let wordPopEnabled = "wordPopEnabled"
         nonisolated static let iCloudSyncEnabled = "iCloudSyncEnabled"
 
         // App-level flags (not reader settings, but registered here so key
@@ -80,6 +81,7 @@ enum ReaderSettings {
         /// A level from 0 to 1. This one is the tone's faded text; see
         /// `EnclosingMarksLayout.opacity(level:tone:)`.
         nonisolated static let enclosingMarksOpacity = 0.5
+        nonisolated static let wordPopEnabled = false
         /// Off, so nothing syncs without a stored yes. Launch stores the
         /// real starting choice once: on for a fresh install, off and asked
         /// for anyone who used Strobe before (`SyncConsent.storeLaunchChoice`).
