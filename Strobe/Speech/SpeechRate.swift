@@ -88,10 +88,11 @@ nonisolated enum SpeechRate {
 ///
 /// Voices differ, and so do texts: long words and many pauses read slower.
 /// Each rendered chunk is a measurement, counted by its length at the
-/// natural pace, so a short chunk with proportionally more silence around it
-/// moves the estimate little, and the speed a chunk was rendered at doesn't
-/// change how much it counts. The estimate remembers about ``memory``
-/// seconds of speech, so it follows the text as it changes.
+/// natural pace up to ``maximumWeight``, so a short chunk with
+/// proportionally more silence around it moves the estimate little, one
+/// long chunk can't move it far, and the speed a chunk was rendered at
+/// doesn't change how much it counts. The estimate remembers about
+/// ``memory`` seconds of speech, so it follows the text as it changes.
 nonisolated struct VoicePace: Hashable, Codable, Sendable {
 
     /// The estimate before a voice has read anything. Kokoro's `af_heart`
@@ -107,9 +108,16 @@ nonisolated struct VoicePace: Hashable, Codable, Sendable {
     /// estimate `d / (memory + d)` of the way to its own measurement.
     static let memory: TimeInterval = 60
 
-    /// Speeds at the natural pace a measurement is held to, so a chunk that
-    /// is mostly silence, or one long number, can't throw the estimate off.
+    /// Speeds at the natural pace a measurement must fall in to count. A
+    /// chunk that is mostly silence, or a list of long numbers or years
+    /// read out in full, says nothing about how the voice reads prose.
     static let plausibleWordsPerMinute: ClosedRange<Double> = 80...400
+
+    /// The most one chunk counts for, in seconds at the natural pace: about
+    /// two sentences. A long chunk that reads unlike the text around it
+    /// moves the estimate at most `maximumWeight / (memory + maximumWeight)`
+    /// of the way.
+    static let maximumWeight: TimeInterval = 10
 
     /// Chunks shorter than this, in seconds at the natural pace, aren't
     /// measured.
@@ -136,10 +144,9 @@ nonisolated struct VoicePace: Hashable, Codable, Sendable {
         let naturalDuration = duration * SpeechRate.paceMultiplier(atSpeed: speed)
         guard naturalDuration >= Self.minimumDuration else { return }
         let measured = Double(wordCount) / naturalDuration * 60
-        let observed = min(max(measured, Self.plausibleWordsPerMinute.lowerBound),
-                           Self.plausibleWordsPerMinute.upperBound)
-        naturalWordsPerMinute = (naturalWordsPerMinute * evidence + observed * naturalDuration)
-            / (evidence + naturalDuration)
-        evidence = min(evidence + naturalDuration, Self.memory)
+        guard Self.plausibleWordsPerMinute.contains(measured) else { return }
+        let weight = min(naturalDuration, Self.maximumWeight)
+        naturalWordsPerMinute = (naturalWordsPerMinute * evidence + measured * weight) / (evidence + weight)
+        evidence = min(evidence + weight, Self.memory)
     }
 }

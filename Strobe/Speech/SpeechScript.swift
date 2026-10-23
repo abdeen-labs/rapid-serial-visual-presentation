@@ -14,7 +14,9 @@ import Foundation
 ///   together, or be read out as a symbol. A single
 ///   hyphen stays (`well-known`, `pre-`, `-5`), and so does a single en dash
 ///   inside a word (`1990–2000`). The tokenizer leaves a spaced en dash on
-///   the word before it, so one at the end of a word reads as a comma.
+///   the word before it, so one at the end of a word reads as a comma. The
+///   comma is always inside the range of the word before it: `said`,
+///   `—Hello` reads as `said,` and `Hello`.
 /// - Decorative marks are left out. A word of nothing else (`***`, `•`, `|`,
 ///   `#`) isn't read and gets an empty range; at the edges of a word they are
 ///   dropped from it (`end.***`, `*note*`, `item•`).
@@ -71,8 +73,8 @@ nonisolated struct SpeechScript: Equatable, Sendable {
     ///   the result runs from the first to the last, with any words between
     ///   them that aren't read.
     /// - An empty range touches the word it lies in.
-    /// - A range that touches no word lies in the space or comma between two,
-    ///   and belongs to the word after it.
+    /// - A range that touches no word lies in the space between two, and
+    ///   belongs to the word after it.
     /// - A range past the last word read gives an empty result at the end.
     func wordPositions(touching range: Range<Int>) -> Range<Int> {
         var first: Int?
@@ -111,6 +113,8 @@ nonisolated private struct ScriptWriter {
     private var length = 0
     /// What the last word read was written as.
     private var previous = ""
+    /// The position in ``ranges`` of the last word read.
+    private var previousPosition: Int?
     /// Whether a dash in a word left out reads as a comma before the next.
     private var pauseIsPending = false
 
@@ -125,10 +129,13 @@ nonisolated private struct ScriptWriter {
             pauseIsPending = pauseIsPending || spoken.pausesBefore
             return
         }
-        if let last = previous.unicodeScalars.last {
+        if let last = previous.unicodeScalars.last, let previousPosition {
             let previousIsCJK = CJKUtilities.isCJK(last)
             if pauseIsPending || spoken.pausesBefore, !SpokenWord.endsWithPause(previous) {
                 write(previousIsCJK ? "\u{FF0C}" : ",")        // ， fullwidth comma
+                // The comma ends the word before, inside its range: a voice
+                // given each word's text alone would otherwise never see it.
+                ranges[previousPosition] = ranges[previousPosition].lowerBound..<length
             }
             if !(joinsCJKWords && previousIsCJK && CJKUtilities.isCJK(first)) {
                 write(" ")
@@ -136,6 +143,7 @@ nonisolated private struct ScriptWriter {
         }
         let start = length
         write(spoken.text)
+        previousPosition = ranges.count
         ranges.append(start..<length)
         previous = spoken.text
         pauseIsPending = false

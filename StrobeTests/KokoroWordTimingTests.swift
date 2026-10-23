@@ -120,6 +120,48 @@ struct KokoroWordTimingTests {
         }
     }
 
+    @Test func linesFollowTheParts() {
+        let words = ["ab", "", "cd", "ef"]
+        let lines = KokoroPhonemeLine.lines(for: words, limit: 5)
+        #expect(lines.map { $0.words } == KokoroPhonemeLine.parts(for: words, limit: 5))
+        #expect(lines.map { $0.line } == [
+            KokoroPhonemeLine(wordPhonemes: ["ab", "", "cd"]),
+            KokoroPhonemeLine(wordPhonemes: ["ef"]),
+        ])
+    }
+
+    /// A word too long alone shares its part with any words without
+    /// phonemes beside it, as an emoji or a bullet next to a long number
+    /// read digit by digit, and is still cut to the limit.
+    @Test func wordTooLongBesideWordsWithoutPhonemesIsCut() {
+        let long = "ab cd ef"
+        let alone = KokoroPhonemeLine.lines(for: [long, ""], limit: 5)
+        #expect(alone.map { $0.words } == [0..<2])
+        #expect(alone.map { $0.line.text } == ["ab cd"])
+        #expect(alone.map { $0.line.wordSpans } == [[0..<5, nil]])
+
+        let after = KokoroPhonemeLine.lines(for: ["", long], limit: 5)
+        #expect(after.map { $0.words } == [0..<2])
+        #expect(after.map { $0.line.wordSpans } == [[nil, 0..<5]])
+
+        let between = KokoroPhonemeLine.lines(for: ["gh", long, "", "ij"], limit: 5)
+        #expect(between.map { $0.words } == [0..<1, 1..<3, 3..<4])
+        #expect(between.map { $0.line.text } == ["gh", "ab cd", "ij"])
+    }
+
+    @Test func linesNeverPassTheLimit() {
+        // Kokoro's limit, and a long number read digit by digit: 1,499 scalars.
+        let limit = 510
+        let long = Array(repeating: "θɹˈi", count: 300).joined(separator: " ")
+        let words = ["ðə", "", long, "", "ɪz", long, "", long]
+        let lines = KokoroPhonemeLine.lines(for: words, limit: limit)
+        #expect(lines.map { $0.words } == [0..<2, 2..<4, 4..<5, 5..<7, 7..<8])
+        for line in lines {
+            #expect(line.line.length > 0)
+            #expect(line.line.length <= limit)
+        }
+    }
+
     @Test func truncatesAtTheLastWholeGroup() {
         #expect(KokoroPhonemeLine.truncated("abc def ghi", toLength: 9) == "abc def")
         #expect(KokoroPhonemeLine.truncated("abc def ghi", toLength: 7) == "abc def")

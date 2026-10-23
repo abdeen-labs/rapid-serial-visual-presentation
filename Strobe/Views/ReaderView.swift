@@ -327,6 +327,13 @@ struct ReaderView: View {
                 await readAloud.update(readAloudSetup, engine: engine)
             }
         }
+        // A voice that stopped working while it read says why at once:
+        // reading paused on its own.
+        .onChange(of: readAloud.failureAlerts) {
+            if let message = readAloud.failure {
+                readAloudPrompt = .failure(message: message)
+            }
+        }
         .onAppear {
             readerFocused = true
             AppRouter.shared.readerDidAppear(documentID: document.id)
@@ -372,7 +379,8 @@ struct ReaderView: View {
         .onChange(of: engine.isPlaying) { wasPlaying, isNowPlaying in
             // Any pause ends hands-free reading: a tap, Space, the scene
             // going inactive, the last word. A voice that got ready while
-            // the words played reads from here.
+            // the words played reads from here, and one chosen that
+            // wouldn't load says so.
             if !isNowPlaying {
                 isHandsFree = false
                 readAloud.playbackDidPause()
@@ -774,7 +782,9 @@ struct ReaderView: View {
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        let paceFactor = ReadingPace.shared.factor(for: document)
+        // A voice reads at the plain speed, whatever the timing settings
+        // the document's pace follows.
+        let paceFactor = readAloud.isReadingAloud ? nil : ReadingPace.shared.factor(for: document)
 
         return VStack(spacing: 0) {
             if !document.chapters.isEmpty {
@@ -975,9 +985,21 @@ struct ReaderView: View {
     private var readAloudSetup: ReadAloudController.Setup {
         readAloud.setup(
             isEnabled: readAloudEnabled,
+            isInBackground: isReadAloudSetAside,
             isLoaded: isLoaded,
             voice: KokoroVoices.chosen(readAloudVoice).id
         )
+    }
+
+    /// Whether reading aloud is set aside for the scene being in the
+    /// background, so the voice model can unload. iOS can end an app in the
+    /// background that holds on to hundreds of megabytes; the Mac keeps it.
+    private var isReadAloudSetAside: Bool {
+        #if os(iOS)
+        scenePhase == .background
+        #else
+        false
+        #endif
     }
 
     private func readAloudButtonTapped(_ tap: ReadAloudAvailability.Tap) {

@@ -10,8 +10,9 @@ internal import UniformTypeIdentifiers
 /// destinations and owns importing (the file picker, drag and drop, and the
 /// File menu commands), plain-text entry, and legacy word storage migration.
 /// It asks for an App Store rating when ``ReviewPrompt`` says one is due,
-/// asks about iCloud sync when a ``SyncPrompt`` is waiting, and offers to
-/// merge books that may be in the library twice (``LikelyDuplicates``).
+/// asks about iCloud sync when a ``SyncPrompt`` is waiting, shows What's New
+/// once after an update (``WhatsNew``), and offers to merge books that may
+/// be in the library twice (``LikelyDuplicates``).
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -21,6 +22,7 @@ struct ContentView: View {
     @AppStorage(ReaderSettings.Keys.defaultWPM) private var defaultWPM: Int = ReaderSettings.Defaults.defaultWPM
     @AppStorage(TextCleaningLevel.storageKey) private var textCleaningLevel = TextCleaningLevel.defaultValue.rawValue
     @AppStorage(ReaderSettings.Keys.hasSeenTutorial) private var hasSeenTutorial = false
+    @AppStorage(ReaderSettings.Keys.iCloudSyncPrompt) private var pendingSyncPrompt: SyncPrompt?
     @AppStorage(ReaderSettings.Keys.didCompactLegacyWordStorage) private var didCompactLegacyWordStorage = false
     @AppStorage(LibrarySortOrder.storageKey) private var librarySortOrderRaw = LibrarySortOrder.defaultValue.rawValue
 
@@ -93,6 +95,12 @@ struct ContentView: View {
             && importError == nil && persistenceError == nil
     }
 
+    /// Whether What's New can show: as for a sync question, which goes
+    /// first when one is waiting.
+    private var canShowWhatsNew: Bool {
+        canAskAboutSync && pendingSyncPrompt == nil
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             libraryContent
@@ -135,6 +143,7 @@ struct ContentView: View {
         #endif
         .welcomeSheet(isPresented: $showWelcome)
         .syncPrompt(canAsk: canAskAboutSync)
+        .whatsNewAfterUpdate(canShow: canShowWhatsNew)
         .sheet(isPresented: $showTextInput) {
             TextInputView()
         }

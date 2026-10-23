@@ -548,10 +548,48 @@ struct ReadAloudTimingTests {
 
     @Test func paceLearnsWeightedByDuration() {
         var pace = VoicePace()
-        // 50 words in 15 s at the natural pace is 200 wpm.
-        pace.learn(wordCount: 50, duration: 15, speed: 1)
-        #expect(abs(pace.naturalWordsPerMinute - (natural * 5 + 200 * 15) / 20) < 1e-9)
-        #expect(pace.evidence == 20)
+        // 30 words in 9 s at the natural pace is 200 wpm.
+        pace.learn(wordCount: 30, duration: 9, speed: 1)
+        #expect(abs(pace.naturalWordsPerMinute - (natural * 5 + 200 * 9) / 14) < 1e-9)
+        #expect(pace.evidence == 14)
+    }
+
+    /// A chunk counts for its length only up to the most one chunk counts
+    /// for, so a long one, as of a list of years, moves the pace no further
+    /// than two sentences would.
+    @Test func longChunksCountNoMoreThanTheMostOneCountsFor() {
+        var long = VoicePace()
+        long.learn(wordCount: 60, duration: 30, speed: 1)    // 120 wpm
+        var short = VoicePace()
+        short.learn(wordCount: 20, duration: 10, speed: 1)   // 120 wpm
+        #expect(long == short)
+        #expect(abs(long.naturalWordsPerMinute - (natural * 5 + 120 * VoicePace.maximumWeight) / 15) < 1e-9)
+        #expect(long.evidence == VoicePace.initialEvidence + VoicePace.maximumWeight)
+    }
+
+    /// With the pace well learned, one slow chunk of 33 s moves it only a
+    /// little, and one too slow to be prose (40 years read out in full)
+    /// not at all, so the prose after it still reads at its speed.
+    @Test func oneLongSlowChunkCantThrowThePaceOff() {
+        var pace = VoicePace()
+        for _ in 0..<12 {
+            pace.learn(wordCount: 20, duration: 20 * 60 / natural, speed: 1)
+        }
+        #expect(pace.evidence == VoicePace.memory)
+        #expect(abs(pace.naturalWordsPerMinute - natural) < 1e-9)
+
+        var years = pace
+        years.learn(wordCount: 40, duration: 33, speed: 1)    // 73 wpm
+        #expect(years == pace)
+
+        var slow = pace
+        slow.learn(wordCount: 50, duration: 33, speed: 1)     // 91 wpm
+        let measured = 50.0 / 33 * 60
+        let expected = (natural * VoicePace.memory + measured * VoicePace.maximumWeight)
+            / (VoicePace.memory + VoicePace.maximumWeight)
+        #expect(abs(slow.naturalWordsPerMinute - expected) < 1e-9)
+        // About 6% slow, where counting all 33 s made it 16%.
+        #expect(slow.naturalWordsPerMinute > natural * 0.93)
     }
 
     /// A chunk rendered faster is measured at the natural pace: at speed
@@ -598,12 +636,14 @@ struct ReadAloudTimingTests {
         pace.learn(wordCount: 10, duration: 5, speed: .infinity)
         // 0.2 s at speed 1.1 would take 0.212 s at speed 1: too short.
         pace.learn(wordCount: 1, duration: 0.2, speed: 1.1)
+        // One word in 10 s is too slow to be speech, and 20 in 2 s too fast.
+        pace.learn(wordCount: 1, duration: 10, speed: 1)
+        pace.learn(wordCount: 20, duration: 2, speed: 1)
         #expect(pace == VoicePace())
 
-        // One word in 10 s is held to the slowest plausible speed.
-        pace.learn(wordCount: 1, duration: 10, speed: 1)
-        let floor = VoicePace.plausibleWordsPerMinute.lowerBound
-        #expect(abs(pace.naturalWordsPerMinute - (natural * 5 + floor * 10) / 15) < 1e-9)
+        // Slow speech still counts: 9 words in 6 s is 90 wpm.
+        pace.learn(wordCount: 9, duration: 6, speed: 1)
+        #expect(abs(pace.naturalWordsPerMinute - (natural * 5 + 90 * 6) / 11) < 1e-9)
     }
 
     @Test func paceRoundTripsThroughCoding() throws {

@@ -4,7 +4,8 @@ import Foundation
 /// reading aloud does: the voice, not each word's own timing, decides when
 /// the next word shows. Set on ``RSVPEngine/pacer``. The engine starts it on
 /// play, stops it on pause (and so on seeking and scrubbing), passes on
-/// speed changes, and takes its events through ``RSVPEngine/handle(_:)``.
+/// speed and timing changes, and takes its events through
+/// ``RSVPEngine/handle(_:)``.
 protocol WordPacer: AnyObject {
     /// Starts reading at `context.startIndex`. Events go to `onEvent`, on
     /// the main actor, until `stop()`.
@@ -13,6 +14,9 @@ protocol WordPacer: AnyObject {
     func stop()
     /// The speed changed while reading.
     func speedDidChange(wordsPerMinute: Int)
+    /// The timing settings changed while reading. Only the sentence breaks'
+    /// apply to a voice (see ``PacerContext/timing``).
+    func timingDidChange(_ timing: ReaderSettings.TimingSnapshot)
     var onEvent: ((PacerEvent) -> Void)? { get set }
 }
 
@@ -37,9 +41,10 @@ nonisolated struct PacerContext {
 
 /// What a pacer tells the engine as it reads.
 nonisolated enum PacerEvent: Equatable {
-    /// The word at this index is being spoken. Only ever moves forward, and
-    /// ends any chapter announcement or sentence break.
-    case word(Int)
+    /// The word at this index is being spoken, and shows for `interval`
+    /// seconds until the next word, when the pacer knows. Only ever moves
+    /// forward, and ends any chapter announcement or sentence break.
+    case word(Int, interval: TimeInterval? = nil)
     /// The title of the chapter starting at this index is being spoken
     /// (`isVisible`), or fading out after it.
     case chapterTitle(at: Int, isVisible: Bool)

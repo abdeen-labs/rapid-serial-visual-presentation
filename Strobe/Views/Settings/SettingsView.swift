@@ -7,6 +7,7 @@ import SwiftUI
 /// (``KokoroVoiceModel/isSupported``).
 struct SettingsView: View {
     @State private var showWelcome = false
+    @State private var showWhatsNew = false
     #if os(iOS)
     @Environment(\.dismiss) private var dismiss
     #endif
@@ -40,7 +41,6 @@ struct SettingsView: View {
                     ReadAloudSettingsSections()
                 }
                 .formStyle(.grouped)
-                .keepsVoiceModelLoaded()
                 .tabItem { Label("Read Aloud", systemImage: "speaker.wave.2") }
             }
 
@@ -48,13 +48,14 @@ struct SettingsView: View {
                 ReadingControlsSection()
                 ImportSettingsSection()
                 SyncSettingsSection()
-                AboutSection(showWelcome: $showWelcome)
+                AboutSection(showWelcome: $showWelcome, showWhatsNew: $showWhatsNew)
             }
             .formStyle(.grouped)
             .tabItem { Label("General", systemImage: "gearshape") }
         }
         .frame(width: 560, height: 680)
         .welcomeSheet(isPresented: $showWelcome)
+        .whatsNewSheet(isPresented: $showWhatsNew)
         #else
         NavigationStack {
             Form {
@@ -82,7 +83,6 @@ struct SettingsView: View {
                             SettingsPage(title: "Read Aloud") {
                                 ReadAloudSettingsSections()
                             }
-                            .keepsVoiceModelLoaded()
                         }
                     }
                 }
@@ -90,7 +90,7 @@ struct SettingsView: View {
                 ReadingControlsSection()
                 ImportSettingsSection()
                 SyncSettingsSection()
-                AboutSection(showWelcome: $showWelcome)
+                AboutSection(showWelcome: $showWelcome, showWhatsNew: $showWhatsNew)
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -103,6 +103,7 @@ struct SettingsView: View {
             }
         }
         .welcomeSheet(isPresented: $showWelcome)
+        .whatsNewSheet(isPresented: $showWhatsNew)
         #endif
     }
 }

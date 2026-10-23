@@ -602,8 +602,8 @@ struct PassageView: View {
         query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
-    /// Whether the words are dominantly right-to-left script (Arabic or
-    /// Hebrew), sampled from the first `sampleLimit` words.
+    /// Whether the words are dominantly right-to-left (Arabic) script,
+    /// sampled from the first `sampleLimit` words.
     nonisolated static func isRTLDominant(_ words: [String], sampleLimit: Int = 200) -> Bool {
         var rtlCount = 0
         var totalCount = 0
@@ -618,11 +618,10 @@ struct PassageView: View {
 
     nonisolated private static func isRTLScalar(_ scalar: Unicode.Scalar) -> Bool {
         let v = scalar.value
-        return (0x0590...0x05FF).contains(v)   // Hebrew
-            || (0x0600...0x06FF).contains(v)   // Arabic
+        return (0x0600...0x06FF).contains(v)   // Arabic
             || (0x0750...0x077F).contains(v)   // Arabic Supplement
             || (0x08A0...0x08FF).contains(v)   // Arabic Extended-A
-            || (0xFB1D...0xFDFF).contains(v)   // Hebrew/Arabic presentation forms
+            || (0xFB50...0xFDFF).contains(v)   // Arabic presentation forms A
             || (0xFE70...0xFEFF).contains(v)   // Arabic presentation forms B
     }
 

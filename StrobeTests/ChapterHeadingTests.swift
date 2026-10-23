@@ -89,7 +89,6 @@ struct ChapterHeadingTests {
 
     @Test func headingsInScriptsWithoutCase() {
         #expect(repeated("الفصل الأول", in: "الفصل الأول كان يا ما كان") == ["الفصل", "الأول"])
-        #expect(repeated("פרק ראשון", in: "פרק ראשון היה היה פעם") == ["פרק", "ראשון"])
     }
 
     // MARK: - Numbers and labels

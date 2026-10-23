@@ -13,10 +13,13 @@ import os
 /// renders in one go, so it phrases the chunk as a whole. The model
 /// predicts how many frames each phoneme lasts, which places every word in
 /// the audio exactly (``KokoroWordTiming``). A line longer than the model
-/// takes is rendered in parts, split between words.
+/// takes is rendered in parts, split between words, and a word too long for
+/// it alone is cut short.
 ///
 /// Phonemes are kept by spoken text for as long as the renderer lives, so a
-/// word the document repeats is phonemized once.
+/// word the document repeats is phonemized once. A word the phonemizer
+/// failed on for now, rather than for good, isn't kept, and is tried again
+/// the next time it's read.
 final class KokoroSpeechRenderer: SpeechRendering {
     /// The Kokoro voice it reads with, such as `af_heart`.
     let voice: String
@@ -79,12 +82,7 @@ final class KokoroSpeechRenderer: SpeechRendering {
         var firstMarkers: [Int] = []
         var isExact = true
         let sampleRate = Double(KokoroAneConstants.sampleRate)
-        for part in KokoroPhonemeLine.parts(for: wordPhonemes, limit: Self.phonemeLimit) {
-            var partPhonemes = Array(wordPhonemes[part])
-            if partPhonemes.count == 1 {
-                partPhonemes[0] = KokoroPhonemeLine.truncated(partPhonemes[0], toLength: Self.phonemeLimit)
-            }
-            let line = KokoroPhonemeLine(wordPhonemes: partPhonemes)
+        for (part, line) in KokoroPhonemeLine.lines(for: wordPhonemes, limit: Self.phonemeLimit) {
             guard line.length > 0 else { continue }
             try Task.checkCancellation()
             let result = try await manager.synthesizeFromPhonemesDetailed(line.text, voice: voice, speed: Float(speed))
@@ -125,18 +123,24 @@ final class KokoroSpeechRenderer: SpeechRendering {
     // MARK: - Phonemes
 
     /// The phonemes for one word's spoken text, cleaned for the line; empty
-    /// when the phonemizer finds nothing to say, as for an emoji.
+    /// when the phonemizer finds nothing to say, as for an emoji, or failed.
     private func phonemes(for spoken: String, with manager: KokoroAneManager) async throws -> String {
         if let cached = phonemeCache[spoken] {
             return cached
         }
         let plan = KokoroSpokenText.plan(for: spoken)
-        var raw = plan.text.isEmpty ? "" : try await phonemize(plan.text, with: manager)
-        if let fixed = plan.phonemes(fromPhonemizerOutput: raw) {
+        let output = plan.text.isEmpty ? "" : try await phonemize(plan.text, with: manager)
+        let raw: String?
+        if let output, let fixed = plan.phonemes(fromPhonemizerOutput: output) {
             raw = fixed
-        } else {
+        } else if output != nil {
             raw = try await phonemize(KokoroSpokenText.withoutAccents(spoken), with: manager)
+        } else {
+            raw = nil
         }
+        // The phonemizer failed for now: the word goes unread this time, and
+        // isn't kept, so it's tried again the next time it comes up.
+        guard let raw else { return "" }
         let cleaned = KokoroPhonemeLine.cleaned(raw) { encodable.contains($0) }
         if phonemeCache.count >= Self.phonemeCacheLimit {
             phonemeCache.removeAll(keepingCapacity: true)
@@ -151,22 +155,29 @@ final class KokoroSpeechRenderer: SpeechRendering {
     private func titlePhonemes(_ title: String, with manager: KokoroAneManager) async throws -> [String] {
         let text = KokoroSpokenText.readingApproximations(in: KokoroSpokenText.withoutAccents(title))
         guard !text.isEmpty else { return [] }
-        let cleaned = KokoroPhonemeLine.cleaned(try await phonemize(text, with: manager)) { encodable.contains($0) }
+        let output = try await phonemize(text, with: manager) ?? ""
+        let cleaned = KokoroPhonemeLine.cleaned(output) { encodable.contains($0) }
         return cleaned.split(separator: " ").map(String.init)
     }
 
-    /// The phonemizer's output for `text`; empty when it finds nothing to
-    /// say. Only cancellation fails it: a word the phonemizer can't read is
-    /// left unread rather than stopping the chunk.
-    private func phonemize(_ text: String, with manager: KokoroAneManager) async throws -> String {
+    /// The phonemizer's output for `text`: empty when it finds nothing to
+    /// say, as it will every time, and nil when it failed in a way that can
+    /// pass, as when its fallback model's prediction fails. Only
+    /// cancellation throws: a word the phonemizer can't read is left unread
+    /// rather than stopping the chunk.
+    private func phonemize(_ text: String, with manager: KokoroAneManager) async throws -> String? {
         try Task.checkCancellation()
         let phonemes: String
         do {
             phonemes = try await manager.englishPhonemes(for: text)
+        } catch KokoroAneError.inputProcessingFailed(_) {
+            // Nothing in the text it can say, such as an emoji.
+            try Task.checkCancellation()
+            return ""
         } catch {
             try Task.checkCancellation()
-            Self.logger.debug("No phonemes for a word: \(error)")
-            return ""
+            Self.logger.error("Couldn't phonemize a word: \(error)")
+            return nil
         }
         try Task.checkCancellation()
         return phonemes

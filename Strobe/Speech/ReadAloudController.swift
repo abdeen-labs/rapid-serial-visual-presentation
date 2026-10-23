@@ -11,7 +11,14 @@ import Observation
 /// Until a voice is ready (the model downloading, or its first load
 /// compiling it for the device), the words go on without one. A voice that
 /// gets ready while they play takes over at the next pause, rather than
-/// stopping reading to start.
+/// stopping reading to start; so does the news that a newly chosen voice
+/// won't load, while another reads.
+///
+/// A voice that stops working while it reads (the audio session, a
+/// rendering, or playback failing) stops reading aloud for this reader,
+/// which says why (``failure``, ``failureAlerts``) and offers Try Again
+/// (``retry()``). In the background on iOS, reading aloud is set aside,
+/// so the voice model can unload, and set up again on coming back.
 @Observable
 final class ReadAloudController {
     /// Whether a voice reads the engine's words.
@@ -30,9 +37,14 @@ final class ReadAloudController {
     /// download moves.
     private(set) var isModelOnDisk = false
 
-    /// Why the voice couldn't get ready for this reader, when the model's
-    /// state doesn't say, as when it won't load one voice.
+    /// Why the voice couldn't get ready for this reader, or stopped reading,
+    /// when the model's state doesn't say, as when it won't load one voice.
     private(set) var failure: String?
+
+    /// Changes each time a voice that read stops for a failure, so the
+    /// reader can say why at once rather than wait for a tap on its
+    /// button. ``failure`` says why.
+    private(set) var failureAlerts = 0
 
     /// Changes with each Try Again, to set reading aloud up again.
     private(set) var attempt = 0
@@ -52,6 +64,9 @@ final class ReadAloudController {
     /// A voice that got ready while the words played; it reads from the
     /// next pause.
     @ObservationIgnored private var waiting: Voice?
+    /// Why the chosen voice wouldn't load while another read: the one
+    /// reading goes on, and this stops it at the next pause.
+    @ObservationIgnored private var pendingFailure: String?
     @ObservationIgnored private var session: ReadAloudAudioSession?
     /// The document's language, once detected (nil inside when there was
     /// too little text to tell).
@@ -69,6 +84,11 @@ final class ReadAloudController {
     /// What reading aloud depends on. A change sets it up again.
     struct Setup: Equatable {
         var isEnabled: Bool
+        /// Whether the reader's scene is in the background, where reading
+        /// aloud is set aside so the voice model can unload: iOS can end an
+        /// app in the background that holds on to it. Coming back sets it
+        /// up again.
+        var isInBackground: Bool
         /// Whether the engine has the document's words.
         var isLoaded: Bool
         /// The chosen voice's name (``KokoroVoices/chosen(_:)``).
@@ -78,9 +98,17 @@ final class ReadAloudController {
     }
 
     /// What reading aloud depends on, from the reader's part of it: the
-    /// setting, whether the words have loaded, and the chosen voice.
-    func setup(isEnabled: Bool, isLoaded: Bool, voice: String) -> Setup {
-        Setup(isEnabled: isEnabled, isLoaded: isLoaded, voice: voice, isModelOnDisk: isModelOnDisk, attempt: attempt)
+    /// setting, whether its scene is in the background, whether the words
+    /// have loaded, and the chosen voice.
+    func setup(isEnabled: Bool, isInBackground: Bool, isLoaded: Bool, voice: String) -> Setup {
+        Setup(
+            isEnabled: isEnabled,
+            isInBackground: isInBackground,
+            isLoaded: isLoaded,
+            voice: voice,
+            isModelOnDisk: isModelOnDisk,
+            attempt: attempt
+        )
     }
 
     /// Reads `engine`'s words aloud with the chosen voice, or stops reading
@@ -96,12 +124,13 @@ final class ReadAloudController {
         let language = await detectLanguage(of: engine.words)
         guard !Task.isCancelled else { return }
         canReadDocument = KokoroVoices.canRead(documentLanguage: language)
-        guard setup.isEnabled, canReadDocument, isModelOnDisk else {
+        guard setup.isEnabled, !setup.isInBackground, canReadDocument, isModelOnDisk else {
             turnOff()
             return
         }
         if setup.voice == current?.name {
             waiting = nil
+            pendingFailure = nil
             return
         }
         guard setup.voice != waiting?.name else { return }
@@ -112,12 +141,23 @@ final class ReadAloudController {
             let renderer = try await KokoroVoiceModel.shared.renderer(voice: setup.voice)
             guard !Task.isCancelled else { return }
             failure = nil
+            pendingFailure = nil
             read(Voice(name: setup.voice, renderer: renderer))
         } catch {
             // A change to the setup cancels this, and sets up again.
             guard !Task.isCancelled, !(error is CancellationError) else { return }
-            turnOff()
-            failure = error.localizedDescription
+            let message = error.localizedDescription
+            guard current != nil else {
+                turnOff()
+                failure = message
+                return
+            }
+            // A voice reads: it goes on until the next pause, rather than
+            // stopping reading to say so. Try Again then tries the chosen
+            // voice.
+            waiting = nil
+            pendingFailure = message
+            if !engine.isPlaying { playbackDidPause() }
         }
     }
 
@@ -143,11 +183,14 @@ final class ReadAloudController {
         }
     }
 
-    /// Playback paused: a voice that got ready while the words played takes
-    /// over now.
+    /// Playback paused: a chosen voice that wouldn't load while another
+    /// read says so now, and one that got ready takes over.
     func playbackDidPause() {
-        guard let waiting else { return }
-        read(waiting)
+        if let pendingFailure {
+            stopReadingAloud(saying: pendingFailure)
+        } else if let waiting {
+            read(waiting)
+        }
     }
 
     /// Gives the engine a new pacer reading with `voice`, unless the words
@@ -159,15 +202,49 @@ final class ReadAloudController {
             return
         }
         waiting = nil
-        engine.pacer = ReadAloudPacer(
+        let pacer = ReadAloudPacer(
             renderer: voice.renderer,
             player: SpeechPlayer(),
             voiceIdentifier: voice.name,
             session: session ?? makeSession()
         )
+        pacer.onFailure = { [weak self, weak pacer] failure in
+            guard let self, let pacer else { return }
+            self.voiceFailed(failure, in: pacer)
+        }
+        engine.pacer = pacer
         engine.speedCap = Int(ReaderSettings.readAloudWPMRange.upperBound)
         current = voice
         isReadingAloud = true
+    }
+
+    /// The voice stopped working while it read. Reading has paused; the
+    /// words go on without a voice until Try Again.
+    private func voiceFailed(_ failure: ReadAloudPacer.Failure, in pacer: ReadAloudPacer) {
+        // A pacer replaced since changes nothing.
+        guard let engine, engine.pacer === pacer else { return }
+        stopReadingAloud(saying: Self.message(for: failure))
+    }
+
+    /// Stops reading aloud for this reader, and says why: the button shows
+    /// `message`, and the reader is asked to show it at once.
+    private func stopReadingAloud(saying message: String) {
+        // Turning off clears the failure, so it comes first.
+        turnOff()
+        failure = message
+        failureAlerts += 1
+    }
+
+    /// What the reader says when `failure` stopped the voice.
+    private static func message(for failure: ReadAloudPacer.Failure) -> String {
+        switch failure {
+        case .audioSession:
+            "Reading aloud couldn't get the audio. Another app may be using it, as during a call."
+        case .rendering:
+            "The voice couldn't read what comes next."
+        case .playback:
+            "The voice's audio stopped playing."
+        }
     }
 
     private func turnOff() {
@@ -177,6 +254,7 @@ final class ReadAloudController {
         }
         current = nil
         waiting = nil
+        pendingFailure = nil
         isReadingAloud = false
         usesVoiceModel = false
         failure = nil

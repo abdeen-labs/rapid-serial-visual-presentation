@@ -230,14 +230,13 @@ struct SentenceBreakTests {
         ])
     }
 
-    @Test func arabicHangulAndHebrewSentenceEndsBreak() {
+    @Test func arabicAndHangulSentenceEndsBreak() {
         expectBreaks([
             ("\u{645}\u{627}\u{630}\u{627}\u{61F}", "\u{642}\u{627}\u{644}", true),       // ماذا؟ قال
             ("\u{645}\u{631}\u{62D}\u{628}\u{627}.", "\u{643}\u{64A}\u{641}", true),      // مرحبا. كيف
             ("\u{6C1}\u{6D2}\u{6D4}", "\u{6CC}\u{6C1}", true),                            // ہے۔ یہ
             ("\u{C548}\u{B155}\u{D558}\u{C138}\u{C694}.", "\u{C800}\u{B294}", true),      // 안녕하세요. 저는
             ("\u{B124}.", "\u{C54C}\u{AC8C}\u{C2B5}\u{B2C8}\u{B2E4}.", true),             // 네. 알겠습니다.
-            ("\u{5E9}\u{5DC}\u{5D5}\u{5DD}.", "\u{5DE}\u{5D4}", true),                    // שלום. מה
         ])
     }
 

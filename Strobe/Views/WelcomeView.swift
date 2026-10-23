@@ -112,7 +112,8 @@ struct WelcomeView: View {
     }
 }
 
-/// A row on the welcome screen, and on the sync prompt that's modeled on it.
+/// A row on the welcome screen, and on the sync prompt and What's New, which
+/// are modeled on it.
 struct WelcomeFeature: Identifiable {
     let symbol: String
     let title: String

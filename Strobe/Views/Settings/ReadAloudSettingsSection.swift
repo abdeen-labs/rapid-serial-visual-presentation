@@ -167,6 +167,8 @@ struct ReadAloudSettingsSections: View {
         }
         .tint(.primary)
         .disabled(isPreparing && !sampler.isPlaying)
+        // Leaving the page stops the sample, and so does opening the list
+        // of voices on iOS; the model stays loaded a while for the next.
         .onDisappear {
             sampler.stop()
         }
@@ -185,9 +187,7 @@ struct ReadAloudSettingsSections: View {
             if let failure = sampler.failure {
                 return "The sample couldn't play. \(failure)"
             }
-            // Only the default voice comes with the model; the rest
-            // download their own small part when they first read.
-            return "The voice runs on this device, so what you read stays on it. Voices other than \(KokoroVoices.defaultVoice.name) download a little more the first time they read."
+            return "The voice runs on this device, so what you read stays on it."
         case .failed:
             return nil
         }
@@ -195,12 +195,13 @@ struct ReadAloudSettingsSections: View {
 
     // MARK: - Removing
 
-    /// What removing the voice frees, when it's on disk and nothing is
-    /// downloading or loading it.
+    /// What removing the voice frees, when it's on disk, or part of it is,
+    /// as after a download that didn't finish, and nothing is downloading
+    /// or loading it.
     private var removableSize: Int64? {
         switch model.state {
-        case .installed, .ready, .failed: model.installedSize
-        case .notInstalled, .downloading, .preparing: nil
+        case .notInstalled, .installed, .ready, .failed: model.installedSize
+        case .downloading, .preparing: nil
         }
     }
 
@@ -219,34 +220,55 @@ struct ReadAloudSettingsSections: View {
 
 /// Plays a short line in a voice, for choosing one: rendered by the model
 /// and played the way reading aloud plays its words.
+///
+/// It keeps the model loaded (``VoiceModelUse``) while a sample plays and
+/// for ``holdAfterSample`` after, so the next voice's sample, as after
+/// choosing it from the list, doesn't load the model again.
 @Observable
 private final class VoiceSampler {
+    /// How long the model stays loaded after a sample, for the next.
+    static let holdAfterSample: Duration = .seconds(30)
+
     /// Whether a sample is on its way or playing.
     private(set) var isPlaying = false
-    /// Why the last sample didn't play, as when a voice's pack, which
-    /// downloads the first time it reads, couldn't download.
+    /// Why the last sample didn't play, as when the model couldn't load.
     private(set) var failure: String?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var player: SpeechPlayer?
     /// Made for the first sample: the view this belongs to is made often.
     @ObservationIgnored private var session: ReadAloudAudioSession?
+    /// What the samples hold the model as.
+    private let holder = UUID()
+
+    deinit {
+        // Going away without being stopped, as with a window closed while
+        // a sample plays, lets go of the model too.
+        let holder = holder
+        Task { @MainActor in
+            VoiceModelUse.release(holder, after: VoiceSampler.holdAfterSample)
+        }
+    }
 
     func play(_ voice: KokoroVoices.Voice) {
-        stop()
+        endSample()
+        VoiceModelUse.hold(holder)
         isPlaying = true
-        failure = nil
         task = Task { [weak self] in
             do {
                 let renderer = try await KokoroVoiceModel.shared.renderer(voice: voice.id)
                 let words = KokoroVoices.sample(for: voice).split(separator: " ").map(String.init)
                 let speech = try await renderer.render(SpeechScript(words: words, range: words.indices), speed: 1)
                 guard let self, !Task.isCancelled else { return }
-                let session = self.session ?? ReadAloudAudioSession()
-                self.session = session
+                let session = self.session ?? self.makeSession()
                 try await session.activate()
                 guard !Task.isCancelled else { return }
                 let player = SpeechPlayer()
                 player.onChunkFinished = { [weak self] _ in
+                    self?.stop()
+                }
+                // The engine couldn't start again, as after the output
+                // changed, so the sample won't finish on its own.
+                player.onFailure = { [weak self] _ in
                     self?.stop()
                 }
                 player.enqueue(speech, id: 0)
@@ -261,6 +283,12 @@ private final class VoiceSampler {
     }
 
     func stop() {
+        endSample()
+        VoiceModelUse.release(holder, after: Self.holdAfterSample)
+    }
+
+    /// Stops the sample on its way or playing, if there's one.
+    private func endSample() {
         failure = nil
         task?.cancel()
         task = nil
@@ -268,5 +296,23 @@ private final class VoiceSampler {
         player = nil
         session?.deactivate()
         isPlaying = false
+    }
+
+    /// The audio session for samples. When the system stops the audio, as
+    /// for a call, or its output goes away, the sample stops too: it would
+    /// never finish playing.
+    private func makeSession() -> ReadAloudAudioSession {
+        let session = ReadAloudAudioSession()
+        session.onInterruptionBegan = { [weak self] in
+            self?.stop()
+        }
+        session.onOutputLost = { [weak self] in
+            self?.stop()
+        }
+        session.onMediaServicesReset = { [weak self] in
+            self?.stop()
+        }
+        self.session = session
+        return session
     }
 }

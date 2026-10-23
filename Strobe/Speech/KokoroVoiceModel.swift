@@ -16,12 +16,16 @@ import os
 ///
 /// - `Voices` in Application Support holds the model's seven stages and a
 ///   voice pack for each voice offered (``KokoroVoices/all``), so every one
-///   reads offline. Another Kokoro voice's pack downloads the first time it
-///   reads.
+///   reads offline. A voice offered since the model was installed gets its
+///   pack when the model next loads.
 /// - FluidAudio keeps the English text frontend (a pronunciation lexicon
 ///   and a small spelling-to-sound model) in its own folder whatever the
 ///   model's folder is: `fluidaudio` in Application Support on iOS, and in
 ///   `~/.cache` on macOS.
+///
+/// A finished install records which of the model's commits it holds
+/// (``Installation``). One from a build that pinned another downloads this
+/// build's model before it loads.
 ///
 /// Loading is shared: callers that stop waiting, as a reader does on every
 /// pause, leave it running for the next.
@@ -56,16 +60,19 @@ final class KokoroVoiceModel {
         case failed(message: String)
     }
 
-    enum ModelError: LocalizedError {
+    nonisolated enum ModelError: LocalizedError {
         /// The model isn't downloaded.
         case notInstalled
         /// The model was removed after the renderer was made.
         case removed
+        /// A download failed, as on a bad connection, after trying again.
+        case downloadFailed
 
         var errorDescription: String? {
             switch self {
             case .notInstalled: "The voice isn't downloaded."
             case .removed: "The voice was removed."
+            case .downloadFailed: "The voice couldn't download. Check your internet connection and try again."
             }
         }
     }
@@ -85,9 +92,11 @@ final class KokoroVoiceModel {
     /// One more voice: about 2.7 MB of text, kept as 0.5 MB.
     nonisolated static let voicePackDownloadSize: Int64 = 2_670_000
 
-    /// What the downloaded files take on disk, in bytes; nil when not
-    /// installed. Core ML also keeps what it compiled for the device's
-    /// processors in the app's caches, where the system can clear it.
+    /// What the downloaded files take on disk, in bytes: the install's, or
+    /// what a download that didn't finish left, so either can be removed;
+    /// nil when there's nothing. Core ML also keeps what it compiled for
+    /// the device's processors in the app's caches, where the system can
+    /// clear it.
     private(set) var installedSize: Int64?
 
     /// The folder the model goes in.
@@ -95,9 +104,13 @@ final class KokoroVoiceModel {
     @ObservationIgnored private let version: KokoroAneVersion
     @ObservationIgnored private var manager: KokoroAneManager
     @ObservationIgnored private var installTask: Task<Void, Never>?
-    @ObservationIgnored private var loadTask: Task<Void, any Error>?
+    @ObservationIgnored private var loadTask: Task<Loaded, any Error>?
     /// Voice packs being made ready, by voice.
     @ObservationIgnored private var voiceTasks: [String: Task<Void, any Error>] = [:]
+    /// Downloads the packs of voices offered that aren't on disk.
+    @ObservationIgnored private var packTask: Task<Void, Never>?
+    /// The files being removed, which nothing loads or installs meanwhile.
+    @ObservationIgnored private var removal: Task<Void, Never>?
     /// Count installs and loads, so a finished one clears only its own task.
     @ObservationIgnored private var installCount = 0
     @ObservationIgnored private var loadCount = 0
@@ -106,6 +119,12 @@ final class KokoroVoiceModel {
     /// can tell it mustn't load them again.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var hasLoggedAdvisory = false
+
+    /// A loaded model's manager, and the generation it loaded in.
+    nonisolated private struct Loaded: Sendable {
+        let manager: KokoroAneManager
+        let generation: Int
+    }
 
     /// - Parameters:
     ///   - directory: Where the model goes; `Voices` in Application Support
@@ -123,38 +142,56 @@ final class KokoroVoiceModel {
         self.directory = directory
         self.version = version
         ModelRegistry.revisionOverrides[Self.modelRepository] = Self.modelRevision
-        manager = KokoroAneManager(variant: .english, directory: directory, version: version)
+        manager = Self.makeManager(directory: directory, version: version)
         if let installation = Self.installation(in: directory) {
             state = .installed
             installedSize = Self.measuredSize(of: directory, sharesWeights: installation.sharesCompiledWeights)
+        } else {
+            Task { await measureUnfinishedDownload() }
         }
     }
 
     /// The Hugging Face repository the model downloads from.
     nonisolated static let modelRepository = "FluidInference/kokoro-82m-coreml"
 
-    /// The repository's commit the model's stages download from, the one
-    /// they were measured with, so a change to its `main` can't replace them
-    /// under a released app. FluidAudio applies it only to the model's
-    /// stages: the text frontend and the voice packs still come from `main`.
+    /// The repository's commit the model downloads from, the one it was
+    /// measured with, so a change to its `main` can't replace it under a
+    /// released app. FluidAudio applies it to the model's stages and to the
+    /// text frontend, its pronunciation lexicon included. Only the voice
+    /// packs come from `main`, and the lexicon too should FluidAudio find it
+    /// missing once the frontend has downloaded. Each install records the
+    /// commit it came from, and one from another downloads again before it
+    /// loads, so a change here reaches every install.
     nonisolated static let modelRevision = "e61d9ee79a01ad4ebf6b3d8bcfe2a03f6b8da105"
+
+    /// The commit installs came from before they recorded one, which was
+    /// the first pinned. Written out, so it stays when ``modelRevision``
+    /// moves on.
+    nonisolated static let firstModelRevision = "e61d9ee79a01ad4ebf6b3d8bcfe2a03f6b8da105"
 
     nonisolated static var defaultDirectory: URL {
         URL.applicationSupportDirectory.appending(path: "Voices", directoryHint: .isDirectory)
     }
 
+    private static func makeManager(directory: URL, version: KokoroAneVersion) -> KokoroAneManager {
+        KokoroAneManager(variant: .english, directory: directory, version: version)
+    }
+
     // MARK: - Installing
 
-    /// Downloads the model if it isn't on disk, then loads it. Cancelling
-    /// the caller stops it waiting, not the download: ``cancelInstall()``
-    /// does that.
+    /// Downloads the model if it isn't on disk, or is an older build's,
+    /// then loads it. Cancelling the caller stops it waiting, not the
+    /// download: ``cancelInstall()`` does that.
     func install() async {
+        if let removal {
+            await removal.value
+        }
         if installTask == nil {
             switch state {
             case .ready:
                 return
             case .preparing:
-                try? await load()
+                _ = try? await load()
                 return
             case .notInstalled, .downloading, .installed, .failed:
                 startInstall()
@@ -167,12 +204,9 @@ final class KokoroVoiceModel {
 
     /// Stops a download under way. What it downloaded is deleted.
     func cancelInstall() {
-        guard let installTask else { return }
-        installTask.cancel()
-        // FluidAudio downloads the model in a task of its own, which only
-        // its cleanup cancels.
-        let manager = manager
-        Task { await manager.cleanup() }
+        // With the original runtime every download runs in the install's
+        // task, and FluidAudio's downloader stops when that's cancelled.
+        installTask?.cancel()
     }
 
     private func startInstall() {
@@ -187,7 +221,18 @@ final class KokoroVoiceModel {
     }
 
     private func performInstall() async {
+        if let installation = Self.installation(in: directory), !installation.isCurrent {
+            // An older build's model. FluidAudio only checks that files are
+            // there, so it would keep the old ones; they go first, and this
+            // build's download in their place, its progress counted from
+            // nothing.
+            Self.logger.info("Updating the voice from \(installation.modelRevision, privacy: .public)")
+            state = .downloading(fraction: 0)
+            await deleteFiles()
+        }
         let wasInstalled = Self.installation(in: directory) != nil
+        let manager = manager
+        let generation = generation
         state = wasInstalled ? .preparing : .downloading(fraction: 0)
         let progress = wasInstalled ? nil : Task { await followDownload() }
         defer { progress?.cancel() }
@@ -218,11 +263,15 @@ final class KokoroVoiceModel {
             state = .preparing
             let directory = directory
             let shares = await Self.tidyUp(directory)
+            // Removed meanwhile: the removal finishes up.
+            guard generation == self.generation else { return }
             try Self.writeInstallation(Installation(sharesCompiledWeights: shares), in: directory)
             vocabulary = try Self.loadVocabulary(in: directory)
             installedSize = await Self.measuredSizeOffMain(of: directory, sharesWeights: shares)
+            guard generation == self.generation else { return }
             state = .ready
         } catch {
+            guard generation == self.generation else { return }
             if Task.isCancelled {
                 await manager.cleanup()
                 if wasInstalled {
@@ -233,7 +282,8 @@ final class KokoroVoiceModel {
                 }
             } else {
                 Self.logger.error("Installing the voice failed: \(error)")
-                state = .failed(message: error.localizedDescription)
+                state = .failed(message: Self.failureMessage(for: error))
+                await measureUnfinishedDownload()
             }
         }
     }
@@ -242,14 +292,35 @@ final class KokoroVoiceModel {
     /// offered reads offline, moving the progress on after each. The
     /// default voice comes with the model.
     private func downloadVoicePacks(_ voices: [String]) async throws {
-        let repository = directory.appending(path: Repo.kokoroAne.folderName)
+        let repository = Self.repositoryDirectory(in: directory)
         var done = Self.filesDownloadSize
         for voice in voices where voice != KokoroAneConstants.defaultVoice {
-            try Task.checkCancellation()
-            _ = try await KokoroAneResourceDownloader.ensureVoicePack(voice, repoDirectory: repository)
+            try await Self.downloadVoicePack(voice, into: repository)
             done += Self.voicePackDownloadSize
             if case .downloading(let fraction) = state {
                 state = .downloading(fraction: max(fraction ?? 0, min(0.99, Double(done) / Double(Self.downloadSize))))
+            }
+        }
+    }
+
+    /// Downloads the packs of voices offered that aren't on disk, as for a
+    /// voice offered since the model was installed, so every voice reads
+    /// offline. It runs beside a load, which doesn't wait for it. It stops
+    /// at a pack that won't download, as when offline: the rest are tried
+    /// at the next load, or each when its voice first reads.
+    private func downloadMissingVoicePacks() {
+        guard packTask == nil, version == .legacy else { return }
+        let repository = Self.repositoryDirectory(in: directory)
+        let missing = Self.missingVoicePacks(in: repository)
+        guard !missing.isEmpty else { return }
+        packTask = Task {
+            defer { packTask = nil }
+            for voice in missing {
+                do {
+                    try await Self.downloadVoicePack(voice, into: repository)
+                } catch {
+                    return
+                }
             }
         }
     }
@@ -278,6 +349,22 @@ final class KokoroVoiceModel {
         }
     }
 
+    /// Measures, off the main actor, what a download that didn't finish
+    /// left, so it can be removed: there's no install to say how much there
+    /// is.
+    private func measureUnfinishedDownload() async {
+        let directory = directory
+        let generation = generation
+        let size = await Self.unfinishedDownloadSize(in: directory)
+        guard generation == self.generation, removal == nil, Self.installation(in: directory) == nil else { return }
+        switch state {
+        case .notInstalled, .failed:
+            installedSize = size
+        case .downloading, .installed, .preparing, .ready:
+            break
+        }
+    }
+
     // MARK: - Loading
 
     /// A renderer reading with `voice`, a Kokoro voice name such as
@@ -286,16 +373,13 @@ final class KokoroVoiceModel {
     /// the voice's pack isn't on disk and can't be downloaded. A cancelled
     /// caller stops waiting at once and leaves the load running.
     func renderer(voice: String) async throws -> any SpeechRendering {
-        if let installTask {
-            try await waitLeavingRunning(for: installTask)
-        }
-        let generation = generation
-        let manager = try await loadedManager(for: generation)
-        try await prepareVoice(voice, with: manager)
-        guard generation == self.generation else { throw ModelError.removed }
+        let loaded = try await load()
+        guard loaded.generation == generation else { throw ModelError.removed }
+        try await prepareVoice(voice, with: loaded.manager)
+        guard loaded.generation == generation else { throw ModelError.removed }
         let vocabulary = try self.vocabulary ?? Self.loadVocabulary(in: directory)
         self.vocabulary = vocabulary
-        return KokoroSpeechRenderer(model: self, generation: generation, voice: voice, vocabulary: vocabulary)
+        return KokoroSpeechRenderer(model: self, generation: loaded.generation, voice: voice, vocabulary: vocabulary)
     }
 
     /// The loaded model's manager for a renderer made at `generation`,
@@ -303,9 +387,9 @@ final class KokoroVoiceModel {
     /// waiting at once and leaves the load running.
     func loadedManager(for generation: Int) async throws -> KokoroAneManager {
         guard generation == self.generation else { throw ModelError.removed }
-        try await load()
-        guard generation == self.generation else { throw ModelError.removed }
-        return manager
+        let loaded = try await load()
+        guard loaded.generation == generation, generation == self.generation else { throw ModelError.removed }
+        return loaded.manager
     }
 
     /// Loads the model from disk if it isn't loaded, in a task that outlasts
@@ -313,35 +397,47 @@ final class KokoroVoiceModel {
     /// the model for the device's processors, which took 8.5 seconds on an
     /// M3 Pro (FluidAudio measured about 20 on an M1), and again whenever the
     /// system clears that from the caches. A load after that took 0.8
-    /// seconds, warming up included.
-    private func load() async throws {
+    /// seconds, warming up included. An older build's model downloads this
+    /// build's first, as ``install()`` does.
+    ///
+    /// Returns the manager the load made ready, which stays loaded for
+    /// whoever renders with it even if the model unloads meanwhile.
+    private func load() async throws -> Loaded {
+        guard removal == nil else { throw ModelError.removed }
+        if installTask == nil, loadTask == nil, state != .ready,
+           let installation = Self.installation(in: directory), !installation.isCurrent {
+            startInstall()
+        }
         if let installTask {
             try await waitLeavingRunning(for: installTask)
+            guard removal == nil else { throw ModelError.removed }
         }
-        if loadTask == nil {
+        let task: Task<Loaded, any Error>
+        if let loadTask {
+            task = loadTask
+        } else {
             switch state {
             case .ready:
-                return
+                return Loaded(manager: manager, generation: generation)
             case .notInstalled, .downloading:
                 throw ModelError.notInstalled
             case .installed, .preparing, .failed:
                 guard Self.installation(in: directory) != nil else { throw ModelError.notInstalled }
             }
-            startLoading()
+            task = startLoading()
         }
-        if let loadTask {
-            try await waitLeavingRunning(for: loadTask)
-        }
+        return try await waitLeavingRunning(for: task)
     }
 
-    private func startLoading() {
+    private func startLoading() -> Task<Loaded, any Error> {
         logAdvisory()
         loadCount += 1
         let number = loadCount
         let generation = generation
         let manager = manager
         state = .preparing
-        loadTask = Task {
+        downloadMissingVoicePacks()
+        let task = Task<Loaded, any Error> {
             defer {
                 if loadCount == number { loadTask = nil }
             }
@@ -350,14 +446,19 @@ final class KokoroVoiceModel {
                 if generation == self.generation {
                     state = .ready
                 }
+                return Loaded(manager: manager, generation: generation)
             } catch {
                 if generation == self.generation {
                     Self.logger.error("Loading the voice failed: \(error)")
-                    state = .failed(message: error.localizedDescription)
+                    state = .failed(message: Self.failureMessage(for: error))
                 }
+                // FluidAudio downloads a stage it finds missing.
+                if Self.isDownloadFailure(error) { throw ModelError.downloadFailed }
                 throw error
             }
         }
+        loadTask = task
+        return task
     }
 
     /// Loads the model, then warms it up, so the first chunk read renders as
@@ -365,17 +466,29 @@ final class KokoroVoiceModel {
     /// lexicon, which took 0.67 seconds, and the first render sets up Core
     /// ML's predictions.
     nonisolated private static func loadAndWarmUp(_ manager: KokoroAneManager) async throws {
-        try await manager.initialize()
-        _ = try? await manager.englishPhonemes(for: "Hello.")
-        _ = try await manager.synthesizeFromPhonemesDetailed("həlˈO.")
+        try await withTaskCancellationHandler {
+            try await manager.initialize()
+            _ = try? await manager.englishPhonemes(for: "Hello.")
+            _ = try await manager.synthesizeFromPhonemesDetailed("həlˈO.")
+        } onCancel: {
+            // FluidAudio loads the model in a task of its own, which only
+            // its cleanup cancels. With the original runtime that only
+            // compiles; the v3 runtime downloads there too.
+            Task { await manager.cleanup() }
+        }
     }
 
-    /// Makes sure `voice`'s pack is on disk and loaded, downloading it the
-    /// first time the voice reads, in a task that outlasts its callers.
-    private func prepareVoice(_ voice: String, with manager: KokoroAneManager) async throws {
+    /// Makes sure `voice`'s pack is on disk and loaded, downloading it if
+    /// it isn't, in a task that outlasts its callers.
+    func prepareVoice(_ voice: String, with manager: KokoroAneManager) async throws {
+        let repository = Self.repositoryDirectory(in: directory)
+        let downloadsPack = version == .legacy
         let task = voiceTasks[voice] ?? {
             let task = Task {
                 defer { voiceTasks[voice] = nil }
+                if downloadsPack {
+                    try await Self.downloadVoicePack(voice, into: repository)
+                }
                 try await manager.initialize(preloadVoices: [voice])
             }
             voiceTasks[voice] = task
@@ -384,41 +497,76 @@ final class KokoroVoiceModel {
         try await waitLeavingRunning(for: task)
     }
 
-    /// Frees the loaded model's memory, for when no reader reads aloud.
-    func unload() async {
-        guard state == .ready, loadTask == nil, installTask == nil else { return }
-        await manager.cleanup()
-        if state == .ready {
-            state = .installed
-        }
+    /// Frees the loaded model's memory, for when nothing reads with it.
+    ///
+    /// The manager gives way to a fresh one rather than being cleaned up:
+    /// FluidAudio's cleanup keeps the pronunciation lexicon it parsed, some
+    /// 40 MB, and a render under way would have it load the model again.
+    /// The old manager frees once the last render with it is done, and the
+    /// next load parses the lexicon again, in its warm-up. FluidAudio's
+    /// spelling-to-sound model stays loaded, with no way to free it.
+    func unload() {
+        guard state == .ready, !isBusy, removal == nil else { return }
+        manager = Self.makeManager(directory: directory, version: version)
+        state = .installed
+    }
+
+    /// Whether a download, a load, or a voice getting ready is under way,
+    /// which the model doesn't unload during.
+    var isBusy: Bool {
+        installTask != nil || loadTask != nil || !voiceTasks.isEmpty
     }
 
     // MARK: - Removing
 
     /// Deletes the downloaded files, unloading the model first.
     func remove() async {
-        if let installTask {
-            cancelInstall()
-            await installTask.value
+        let task = removal ?? startRemoval()
+        await task.value
+    }
+
+    private func startRemoval() -> Task<Void, Never> {
+        // Before anything else, so that no render under way, and nothing
+        // made before, loads the files again or downloads what's gone.
+        startOver()
+        let task = Task {
+            if let installTask {
+                cancelInstall()
+                await installTask.value
+            }
+            if let loadTask {
+                _ = try? await loadTask.value
+            }
+            for voiceTask in voiceTasks.values {
+                voiceTask.cancel()
+                _ = try? await voiceTask.value
+            }
+            if let packTask {
+                packTask.cancel()
+                await packTask.value
+            }
+            await deleteFiles()
+            state = .notInstalled
+            removal = nil
         }
-        if let loadTask {
-            _ = try? await loadTask.value
-        }
-        for task in voiceTasks.values {
-            task.cancel()
-            _ = try? await task.value
-        }
-        await manager.cleanup()
-        await deleteFiles()
-        state = .notInstalled
+        removal = task
+        return task
+    }
+
+    /// Starts over with a fresh manager in a new generation. The old
+    /// manager isn't cleaned up, which would have it load again on the next
+    /// call: it keeps what it loaded for a render under way, never loading
+    /// or downloading, and frees once the last render with it is done.
+    private func startOver() {
+        generation += 1
+        manager = Self.makeManager(directory: directory, version: version)
+        vocabulary = nil
     }
 
     /// Deletes every file the model downloaded or compiled, and starts over
     /// with a new manager, which downloads the frontend again too.
     private func deleteFiles() async {
-        generation += 1
-        manager = KokoroAneManager(variant: .english, directory: directory, version: version)
-        vocabulary = nil
+        startOver()
         installedSize = nil
         let directory = directory
         await Self.deleteFiles(in: directory)
@@ -454,22 +602,108 @@ final class KokoroVoiceModel {
     )
 }
 
+// MARK: - Downloads
+
+extension KokoroVoiceModel {
+
+    /// How many times a voice pack's download is tried.
+    nonisolated static let voicePackAttempts = 4
+
+    /// The pause before a voice pack's second try, which doubles before
+    /// each try after it.
+    nonisolated static let voicePackRetryPause: Duration = .seconds(1)
+
+    /// Downloads `voice`'s pack into `repository` unless it's there.
+    /// FluidAudio tries each download once, and reports a failure as the
+    /// voice not being one it has, so a failure is tried again after a
+    /// pause (``voicePackAttempts``). Cancelling stops it. Throws
+    /// ``ModelError/downloadFailed`` when the last try fails.
+    @concurrent
+    nonisolated static func downloadVoicePack(_ voice: String, into repository: URL) async throws {
+        var pause = voicePackRetryPause
+        for attempt in 1...voicePackAttempts {
+            do {
+                try Task.checkCancellation()
+                _ = try await KokoroAneResourceDownloader.ensureVoicePack(voice, repoDirectory: repository)
+                return
+            } catch {
+                try Task.checkCancellation()
+                guard isDownloadFailure(error) else { throw error }
+                guard attempt < voicePackAttempts else {
+                    logger.error("Downloading the \(voice, privacy: .public) voice failed: \(error)")
+                    throw ModelError.downloadFailed
+                }
+                logger.info("Downloading the \(voice, privacy: .public) voice failed; trying again: \(error)")
+                try await Task.sleep(for: pause)
+                pause *= 2
+            }
+        }
+    }
+
+    /// Whether `error` is a download failing, as on a bad connection. For a
+    /// voice offered, FluidAudio's voice not found is one: it says so when
+    /// both places it looks fail.
+    nonisolated static func isDownloadFailure(_ error: any Error) -> Bool {
+        if let error = error as? KokoroAneError {
+            switch error {
+            case .downloadFailed, .voiceNotFound: return true
+            default: return false
+            }
+        }
+        return error is URLError || error is DownloadError || error is AssetDownloader.Error
+    }
+
+    /// What to say when the model couldn't download or load: a download
+    /// that failed says so plainly, whatever FluidAudio called it.
+    nonisolated static func failureMessage(for error: any Error) -> String {
+        if isDownloadFailure(error) {
+            return ModelError.downloadFailed.localizedDescription
+        }
+        return error.localizedDescription
+    }
+}
+
 // MARK: - Files
 
 extension KokoroVoiceModel {
 
     /// What a finished install records, in ``installationFileName``.
-    nonisolated struct Installation: Codable {
+    nonisolated struct Installation: Codable, Equatable {
         /// Whether each source package's weights share their storage with
         /// the compiled copy's (``shareCompiledWeights(in:)``).
         var sharesCompiledWeights: Bool
+        /// The commit of the model's repository the files came from
+        /// (``modelRevision``).
+        var modelRevision: String
+
+        init(sharesCompiledWeights: Bool, modelRevision: String = KokoroVoiceModel.modelRevision) {
+            self.sharesCompiledWeights = sharesCompiledWeights
+            self.modelRevision = modelRevision
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            sharesCompiledWeights = try container.decode(Bool.self, forKey: .sharesCompiledWeights)
+            // Installs from before the commit was recorded came from the
+            // first one pinned.
+            modelRevision = try container.decodeIfPresent(String.self, forKey: .modelRevision)
+                ?? KokoroVoiceModel.firstModelRevision
+        }
+
+        /// Whether the install holds this build's model.
+        var isCurrent: Bool {
+            modelRevision == KokoroVoiceModel.modelRevision
+        }
     }
 
     nonisolated static let installationFileName = "Installed.json"
 
     /// Frontend files FluidAudio downloads with the ones English needs but
-    /// never reads for English: other languages' lexicons and word lists.
-    /// It checks only for the files it reads, so these stay deleted.
+    /// never reads for English: the Spanish and French lexicons, which only
+    /// those languages read, and British and American English word lists
+    /// (`gb_` and `us_`, gold and silver) that nothing in FluidAudio reads.
+    /// English reads only `us_lexicon_cache.json` and the spelling-to-sound
+    /// model, and checks only for those, so these stay deleted.
     nonisolated static let unusedFrontendFiles = [
         "es_lexicon_cache.json", "fr_lexicon_cache.json",
         "gb_gold.json", "gb_silver.json", "us_gold.json", "us_silver.json",
@@ -479,6 +713,20 @@ extension KokoroVoiceModel {
     /// caches.
     nonisolated static func frontendDirectory() throws -> URL {
         try TtsCacheDirectory.ensure()
+    }
+
+    /// The folder in `directory` that FluidAudio keeps the model's stages
+    /// and voice packs in.
+    nonisolated static func repositoryDirectory(in directory: URL) -> URL {
+        directory.appending(path: Repo.kokoroAne.folderName, directoryHint: .isDirectory)
+    }
+
+    /// The voices offered whose packs aren't in `repository`, where
+    /// FluidAudio keeps each as `<voice>.bin`.
+    nonisolated static func missingVoicePacks(in repository: URL) -> [String] {
+        KokoroVoices.all.map(\.id).filter { voice in
+            !FileManager.default.fileExists(atPath: repository.appending(path: "\(voice).bin").path)
+        }
     }
 
     nonisolated static func installation(in directory: URL) -> Installation? {
@@ -533,6 +781,16 @@ extension KokoroVoiceModel {
     @concurrent
     nonisolated static func measuredSizeOffMain(of directory: URL, sharesWeights: Bool) async -> Int64 {
         measuredSize(of: directory, sharesWeights: sharesWeights)
+    }
+
+    /// What a download that didn't finish left in both folders; nil when
+    /// that's nothing, or when `directory` isn't there, so no download
+    /// started: an install makes it first, and removing deletes it.
+    @concurrent
+    nonisolated static func unfinishedDownloadSize(in directory: URL) async -> Int64? {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        let size = measuredSize(of: directory, sharesWeights: false)
+        return size > 0 ? size : nil
     }
 
     /// What the files in both folders take on disk. Package weights that

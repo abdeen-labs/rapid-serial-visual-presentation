@@ -106,6 +106,9 @@ final class SpeechPlayer {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.engineConfigurationChanged() }
         }
+        // `speed` doesn't apply its first value, so the time pitch would run
+        // at 1× until the first change instead of being bypassed.
+        applySpeed()
     }
 
     deinit {

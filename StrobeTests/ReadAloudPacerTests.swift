@@ -140,18 +140,53 @@ struct ReadAloudPacerTests {
         let player = FakePlayer()
         let paces = VoicePaceStore()
         let pacer: ReadAloudPacer
+        /// The events, words by their index alone.
         private(set) var events: [PacerEvent] = []
+        /// Each word event's time until the next word, in order.
+        private(set) var wordIntervals: [TimeInterval?] = []
         /// An event the engine answers by pausing, besides the end and a failure.
         var stopsOn: PacerEvent?
+        /// The failures reported, in order.
+        private(set) var failures: [ReadAloudPacer.Failure] = []
+        /// Whether each failure was reported once reading had stopped,
+        /// after the event saying so.
+        private(set) var failuresFollowStopping = true
 
         init() {
             pacer = ReadAloudPacer(renderer: renderer, player: player, voiceIdentifier: "test", paces: paces)
             pacer.onEvent = { [unowned self] event in
-                events.append(event)
-                if event == .finished || event == .failed || event == stopsOn {
+                var recorded = event
+                if case .word(let index, let interval) = event {
+                    recorded = .word(index)
+                    wordIntervals.append(interval)
+                }
+                events.append(recorded)
+                if recorded == .finished || recorded == .failed || recorded == stopsOn {
                     pacer.stop()
                 }
             }
+            pacer.onFailure = { [unowned self] failure in
+                failures.append(failure)
+                if pacer.isRunning || events.last != .failed {
+                    failuresFollowStopping = false
+                }
+            }
+        }
+
+        /// The timing settings, as they matter to a voice.
+        static func timing(sentenceBreaks: Bool, length: Double = 1) -> ReaderSettings.TimingSnapshot {
+            ReaderSettings.TimingSnapshot(
+                smartTimingEnabled: false,
+                sentencePauseEnabled: false,
+                smartTimingPercentPerLetter: 4,
+                smartTimingMinimumWordLength: 1,
+                sentencePauseMultiplier: 1.5,
+                complexityTimingEnabled: false,
+                complexityIntensity: 0.5,
+                punctuationPauses: PunctuationPauses(),
+                sentenceBreakEnabled: sentenceBreaks,
+                sentenceBreakLength: length
+            )
         }
 
         func start(
@@ -170,18 +205,7 @@ struct ReadAloudPacerTests {
                 readingStarts: readingStarts,
                 announcesChapterAtStart: announcesChapterAtStart,
                 wordsPerMinute: wordsPerMinute,
-                timing: ReaderSettings.TimingSnapshot(
-                    smartTimingEnabled: false,
-                    sentencePauseEnabled: false,
-                    smartTimingPercentPerLetter: 4,
-                    smartTimingMinimumWordLength: 1,
-                    sentencePauseMultiplier: 1.5,
-                    complexityTimingEnabled: false,
-                    complexityIntensity: 0.5,
-                    punctuationPauses: PunctuationPauses(),
-                    sentenceBreakEnabled: sentenceBreaks,
-                    sentenceBreakLength: 1
-                )
+                timing: Self.timing(sentenceBreaks: sentenceBreaks)
             ))
             await settle()
         }
@@ -597,12 +621,15 @@ struct ReadAloudPacerTests {
 
     // MARK: - Failing
 
+    /// A failure stops reading, then says what failed, once.
     @Test func aRenderFailureFails() async {
         let harness = Harness()
         harness.renderer.failure = TestError()
         await harness.start(Self.threeSentences)
         #expect(harness.events == [.word(0), .failed])
         #expect(!harness.pacer.isRunning)
+        #expect(harness.failures == [.rendering])
+        #expect(harness.failuresFollowStopping)
     }
 
     @Test func aPlayerFailureFails() async {
@@ -610,10 +637,117 @@ struct ReadAloudPacerTests {
         await harness.start(Self.threeSentences)
         harness.player.onFailure?(TestError())
         #expect(harness.events == [.word(0), .failed])
+        #expect(harness.failures == [.playback])
+        #expect(harness.failuresFollowStopping)
+        // Stopped, it fails no more.
+        harness.player.onFailure?(TestError())
+        #expect(harness.failures.count == 1)
 
         let refused = Harness()
         refused.player.playError = TestError()
         await refused.start(Self.threeSentences)
         #expect(refused.events == [.word(0), .failed])
+        #expect(refused.failures == [.playback])
+        #expect(refused.failuresFollowStopping)
+    }
+
+    @Test func stoppingIsNoFailure() async {
+        let harness = Harness()
+        await harness.start(Self.threeSentences)
+        harness.hear(0, at: 0.55)
+        harness.pacer.stop()
+        let finished = Harness()
+        await finished.start(["One", "two."])
+        finished.hear(0, at: FakeRenderer.duration(ofWords: 2))
+        #expect(finished.events.last == .finished)
+        #expect(harness.failures.isEmpty)
+        #expect(finished.failures.isEmpty)
+    }
+
+    // MARK: - Word times
+
+    /// Each word comes with its time until the next word, as played: the
+    /// schedule's, at the player's speed. The word showing at the start and
+    /// each chunk's last word run on into what follows, so they have none.
+    @Test func wordsComeWithTheirTimeUntilTheNext() async throws {
+        let harness = Harness()
+        let natural = Int(VoicePace.initialWordsPerMinute)
+        await harness.start(Self.threeSentences, wordsPerMinute: natural)
+        try #require(harness.wordIntervals.count == 1)
+        #expect(harness.wordIntervals[0] == nil)
+
+        harness.hear(0, at: 0.55)
+        #expect(harness.events.last == .word(1))
+        try #require(harness.wordIntervals.count == 2)
+        let first = try #require(harness.wordIntervals[1])
+        #expect(abs(first - FakeRenderer.wordDuration / Double(harness.player.speed)) < 1e-6)
+
+        harness.hear(0, at: 0.85)
+        #expect(harness.events.last == .word(2))
+        try #require(harness.wordIntervals.count == 3)
+        #expect(harness.wordIntervals[2] == nil)
+
+        // Played faster, a word shows for less.
+        harness.pacer.speedDidChange(wordsPerMinute: natural * 21 / 20)
+        harness.hear(1, at: 0.25)
+        #expect(harness.events == [.word(0), .word(1), .word(2), .word(3)])
+        try #require(harness.wordIntervals.count == 4)
+        #expect(harness.player.speed > 1)
+        let faster = try #require(harness.wordIntervals[3])
+        #expect(faster < FakeRenderer.wordDuration)
+        #expect(abs(faster - FakeRenderer.wordDuration / Double(harness.player.speed)) < 1e-6)
+    }
+
+    // MARK: - Timing changes
+
+    /// Sentence breaks turned on while reading follow the sentences the
+    /// player doesn't have yet.
+    @Test func sentenceBreaksTurnedOnMidReadingArePlanned() async {
+        let harness = Harness()
+        await harness.start(Self.threeSentences, sentenceBreaks: false)
+        #expect(harness.player.queue.count == 2)
+        harness.pacer.timingDidChange(Harness.timing(sentenceBreaks: true))
+        await harness.settle()
+        // Already with the player, the first two sentences play on together.
+        harness.hear(1, at: 0.25)
+        #expect(harness.text(ofQueued: 1) == "Four five six.")
+        #expect(harness.text(ofQueued: 2) == nil)
+        #expect(abs(harness.player.queue[2].speech.duration - 0.2) < 0.001)
+        #expect(harness.text(ofQueued: 3) == "Seven eight nine.")
+        harness.hear(1, at: 1.12)
+        #expect(harness.events == [.word(0), .word(3), .word(5), .sentenceBreak])
+        // Nothing else was rendered for them.
+        #expect(harness.renderer.requests.count == 3)
+    }
+
+    /// Turned off, the breaks the player doesn't have are dropped.
+    @Test func sentenceBreaksTurnedOffMidReadingAreDropped() async {
+        let harness = Harness()
+        await harness.start(Self.threeSentences, sentenceBreaks: true)
+        #expect(harness.player.queue.count == 3)
+        harness.pacer.timingDidChange(Harness.timing(sentenceBreaks: false))
+        await harness.settle()
+        // The break the player has still plays.
+        harness.hear(2, at: 0.25)
+        #expect(harness.text(ofQueued: 3) == "Seven eight nine.")
+        harness.hear(2, at: 1.12)
+        #expect(harness.events == [.word(0), .sentenceBreak, .word(3), .word(5)])
+    }
+
+    /// A new length remakes the silence of the breaks the player doesn't
+    /// have yet.
+    @Test func aNewSentenceBreakLengthRemakesBreaksAhead() async {
+        let harness = Harness()
+        await harness.start(Self.threeSentences, sentenceBreaks: true)
+        // The same settings again change nothing.
+        harness.pacer.timingDidChange(Harness.timing(sentenceBreaks: true, length: 1))
+        harness.pacer.timingDidChange(Harness.timing(sentenceBreaks: true, length: 3))
+        await harness.settle()
+        harness.hear(2, at: 0.25)
+        #expect(harness.text(ofQueued: 3) == nil)
+        // Three words' time at 300 wpm; the one the player had stays.
+        #expect(abs(harness.player.queue[3].speech.duration - 0.6) < 0.001)
+        #expect(abs(harness.player.queue[1].speech.duration - 0.2) < 0.001)
+        #expect(harness.renderer.requests.count == 3)
     }
 }

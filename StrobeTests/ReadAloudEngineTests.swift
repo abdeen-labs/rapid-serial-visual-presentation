@@ -14,6 +14,7 @@ struct ReadAloudEngineTests {
         var onEvent: ((PacerEvent) -> Void)?
         private(set) var contexts: [PacerContext] = []
         private(set) var speeds: [Int] = []
+        private(set) var timings: [ReaderSettings.TimingSnapshot] = []
         private(set) var stopCount = 0
         private(set) var isRunning = false
 
@@ -29,6 +30,10 @@ struct ReadAloudEngineTests {
 
         func speedDidChange(wordsPerMinute: Int) {
             speeds.append(wordsPerMinute)
+        }
+
+        func timingDidChange(_ timing: ReaderSettings.TimingSnapshot) {
+            timings.append(timing)
         }
 
         func send(_ events: PacerEvent...) {
@@ -224,6 +229,32 @@ struct ReadAloudEngineTests {
         #expect(engine.isPlaying)
     }
 
+    /// A word's time until the next, as the voice says it, is kept for the
+    /// word's pop to fit inside; a word without one has none.
+    @MainActor
+    @Test func aWordsTimeComesWithIt() {
+        let (engine, pacer) = pacedEngine("One two three four five six.")
+        defer { engine.pause() }
+        engine.play()
+        pacer.send(.word(1, interval: 0.06))
+        #expect(engine.currentWordInterval == 0.06)
+        let cue = WordPop.readerCue(
+            index: engine.currentIndex, isShown: true, isPlaying: true, reduceMotion: false,
+            wordsPerMinute: engine.effectiveWordsPerMinute, wordInterval: engine.currentWordInterval
+        )
+        #expect(abs(cue.duration - 0.03) < 1e-9)
+
+        // A word sent again or late changes nothing.
+        pacer.send(.word(0, interval: 0.5))
+        #expect(engine.currentWordInterval == 0.06)
+        pacer.send(.word(2))
+        #expect(engine.currentWordInterval == nil)
+
+        engine.pause()
+        engine.play()
+        #expect(engine.currentWordInterval == nil)
+    }
+
     @MainActor
     @Test func wordsPlayedAndFurthestCountLikeTheTimer() {
         let (engine, pacer) = pacedEngine("One two three four five six.")
@@ -414,8 +445,10 @@ struct ReadAloudEngineTests {
         #expect(pacer.contexts.last?.wordsPerMinute == 320)
     }
 
+    /// Timing changes while playing reach the pacer, which takes the
+    /// sentence breaks' from them, without restarting it or the timer.
     @MainActor
-    @Test func timingSettingsDoNotReachThePacer() {
+    @Test func timingChangesReachThePacerWhilePlaying() {
         let (engine, pacer) = pacedEngine("One, two. Three four five.")
         defer { engine.pause() }
         engine.play()
@@ -429,10 +462,29 @@ struct ReadAloudEngineTests {
         engine.sentenceBreakLength = 3
         engine.complexityTimingEnabled = true
         engine.complexityIntensity = 1
+        #expect(pacer.timings.count == 10)
+        #expect(pacer.timings.last?.sentenceBreakEnabled == true)
+        #expect(pacer.timings.last?.sentenceBreakLength == 3)
+        #expect(pacer.timings.last?.smartTimingEnabled == true)
         #expect(pacer.speeds.isEmpty)
         #expect(pacer.contexts.count == 1)
         #expect(pacer.stopCount == 0)
         #expect(engine.scheduledDeadline == nil)
         #expect(engine.isPlaying)
+
+        // Setting a value it has, or the speed alone, passes nothing on.
+        engine.sentenceBreakLength = 3
+        engine.wordsPerMinute = 400
+        #expect(pacer.timings.count == 10)
+        #expect(pacer.speeds == [400])
+
+        // Paused, the next start takes them.
+        engine.pause()
+        engine.sentenceBreakEnabled = false
+        #expect(pacer.timings.count == 10)
+        engine.play()
+        #expect(pacer.contexts.last?.timing.sentenceBreakEnabled == false)
+        engine.sentenceBreakLength = 3
+        #expect(pacer.timings.count == 10)
     }
 }

@@ -86,12 +86,12 @@ struct ReadAloudScriptTests {
         #expect(spokenWords(script) == ["the", "stair,", "one"])
     }
 
-    /// A dash opening a word reads as a comma after the word before it, in
-    /// the space between them.
+    /// A dash opening a word reads as a comma after the word before it,
+    /// inside that word's range, as the voice is given each word's text.
     @Test func leadingDashReadsAsACommaBefore() {
         let script = script(["said", "\u{2014}Hello,", "and"])
         #expect(script.text == "said, Hello, and")
-        #expect(spokenWords(script) == ["said", "Hello,", "and"])
+        #expect(spokenWords(script) == ["said,", "Hello,", "and"])
         #expect(self.script(["\u{2014}Hello,", "he", "said."]).text == "Hello, he said.")
         #expect(self.script(["said", "\u{2014}\u{201C}Hello"]).text == "said, \u{201C}Hello")
     }
@@ -106,9 +106,15 @@ struct ReadAloudScriptTests {
     @Test func dashWordAloneReadsAsACommaAndIsLeftOut() {
         let script = script(["Hello", "\u{2014}", "world"])
         #expect(script.text == "Hello, world")
-        #expect(script.wordRanges == [0..<5, 5..<5, 7..<12])
+        // The comma goes in the range of the word read before the dash.
+        #expect(script.wordRanges == [0..<6, 5..<5, 7..<12])
+        #expect(spokenWords(script) == ["Hello,", "", "world"])
+        // Past other words left out too.
+        #expect(spokenWords(self.script(["Hello", "***", "\u{2014}", "world"])) == ["Hello,", "", "", "world"])
         // No second comma after one already there.
-        #expect(self.script(["Hello,", "\u{2014}", "world"]).text == "Hello, world")
+        let comma = self.script(["Hello,", "\u{2014}", "world"])
+        #expect(comma.text == "Hello, world")
+        #expect(comma.wordRanges == [0..<6, 6..<6, 7..<12])
     }
 
     @Test func hyphensAndRangesStay() {
@@ -120,6 +126,8 @@ struct ReadAloudScriptTests {
         let script = script(["他说\u{2014}\u{2014}", "我们", "走吧。"])
         #expect(script.text == "他说\u{FF0C}我们走吧。")
         #expect(spokenWords(script) == ["他说\u{FF0C}", "我们", "走吧。"])
+        // One opening the next word goes in the range of the word before.
+        #expect(spokenWords(self.script(["他说", "\u{2014}\u{2014}我们"])) == ["他说\u{FF0C}", "我们"])
     }
 
     // MARK: - Symbols
@@ -197,11 +205,13 @@ struct ReadAloudScriptTests {
         #expect(script.wordPositions(touching: 7..<8) == 4..<4)
     }
 
-    @Test func lookupOnAnInsertedCommaGivesTheNextWord() {
+    /// An inserted comma is part of the word before it.
+    @Test func lookupOnAnInsertedCommaGivesTheWordBefore() {
         let script = script(["said", "\u{2014}Hello"])
         #expect(script.text == "said, Hello")
-        #expect(script.wordPositions(touching: 4..<5) == 1..<2)
-        #expect(script.wordPositions(touching: 4..<6) == 1..<2)
+        #expect(script.wordPositions(touching: 4..<5) == 0..<1)
+        #expect(script.wordPositions(touching: 4..<4) == 0..<1)
+        #expect(script.wordPositions(touching: 5..<6) == 1..<2)
     }
 
     @Test func lookupInCJKText() {

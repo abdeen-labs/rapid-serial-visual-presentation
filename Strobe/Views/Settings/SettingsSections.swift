@@ -463,6 +463,7 @@ struct ImportSettingsSection: View {
 
 struct AboutSection: View {
     @Binding var showWelcome: Bool
+    @Binding var showWhatsNew: Bool
 
     var body: some View {
         Section {
@@ -470,6 +471,12 @@ struct AboutSection: View {
                 showWelcome = true
             }
             .tint(.primary)
+            if WhatsNew.runningRelease != nil {
+                Button("What's New") {
+                    showWhatsNew = true
+                }
+                .tint(.primary)
+            }
             externalLink("Rate Strobe", url: Self.writeReviewURL)
             externalLink("Source Code", url: URL(string: "https://github.com/abdeen-labs/rapid-serial-visual-presentation")!)
         } footer: {

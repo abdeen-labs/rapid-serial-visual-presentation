@@ -349,8 +349,8 @@ nonisolated struct EnclosingMarks: Sendable {
         for word in words {
             for scalar in word.unicodeScalars where scalar.properties.isAlphabetic {
                 switch scalar.value {
-                case 0x0590...0x08FF,                     // Hebrew, Arabic, Syriac, Thaana, N'Ko, ...
-                     0xFB1D...0xFDFF, 0xFE70...0xFEFF,    // Hebrew and Arabic presentation forms
+                case 0x0600...0x08FF,                     // Arabic, Syriac, Thaana, N'Ko, ...
+                     0xFB50...0xFDFF, 0xFE70...0xFEFF,    // Arabic presentation forms
                      0x10800...0x10FFF, 0x1E800...0x1EFFF:
                     return true
                 default:

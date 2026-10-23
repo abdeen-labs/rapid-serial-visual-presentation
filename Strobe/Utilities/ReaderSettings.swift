@@ -53,6 +53,9 @@ enum ReaderSettings {
         /// Likely duplicates the user chose to keep on this device: a
         /// `KeptLikelyDuplicates` raw value.
         nonisolated static let keptLikelyDuplicates = "keptLikelyDuplicates"
+        /// The app version up to which What's New has been seen: a
+        /// `MARKETING_VERSION` string (``WhatsNew``).
+        nonisolated static let lastSeenWhatsNewVersion = "lastSeenWhatsNewVersion"
     }
 
     enum Defaults {

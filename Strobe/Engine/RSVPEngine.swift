@@ -60,9 +60,10 @@ final class RSVPEngine {
     @ObservationIgnored private(set) var furthestPlayedIndex = 0
 
     /// The display time the current word got when playback reached it, so
-    /// the word's pop can fit inside it (see ``WordPop``); nil before
-    /// playback times a word, and while a ``pacer`` moves playback. Not
-    /// observed: it changes with the word, which views already follow.
+    /// the word's pop can fit inside it (see ``WordPop``): with a ``pacer``,
+    /// the time it gave the word until the next. Nil before playback times
+    /// a word, and while a pacer doesn't know. Not observed: it changes
+    /// with the word, which views already follow.
     @ObservationIgnored private(set) var currentWordInterval: TimeInterval?
 
     /// Moves playback in place of the timer while set, as reading aloud
@@ -87,6 +88,10 @@ final class RSVPEngine {
     /// The speed the pacer was last given, so a settings change that leaves
     /// the speed alone doesn't reach it.
     @ObservationIgnored private var pacedWordsPerMinute: Int?
+
+    /// The timing settings the pacer was last given, so a change to the
+    /// speed alone doesn't pass them on again.
+    @ObservationIgnored private var pacedTiming: ReaderSettings.TimingSnapshot?
 
     /// The target reading speed. Changing this during playback reschedules the timer.
     var wordsPerMinute: Int {
@@ -292,6 +297,7 @@ final class RSVPEngine {
             currentWordInterval = nil
             let context = pacerContext()
             pacedWordsPerMinute = context.wordsPerMinute
+            pacedTiming = context.timing
             pacer.start(context)
             return
         }
@@ -360,11 +366,19 @@ final class RSVPEngine {
 
     private func onPlaybackSettingChanged() {
         if let pacer {
-            // The voice times each word itself, so only the speed reaches it.
+            // The voice times each word itself, so only the speed and the
+            // sentence breaks matter to it; it takes what it needs.
+            guard isPlaying else { return }
             let speed = effectiveWordsPerMinute
-            guard isPlaying, speed != pacedWordsPerMinute else { return }
-            pacedWordsPerMinute = speed
-            pacer.speedDidChange(wordsPerMinute: speed)
+            if speed != pacedWordsPerMinute {
+                pacedWordsPerMinute = speed
+                pacer.speedDidChange(wordsPerMinute: speed)
+            }
+            let timing = self.timing
+            // Answering the speed can stop reading, as a failure does.
+            guard isPlaying, timing != pacedTiming else { return }
+            pacedTiming = timing
+            pacer.timingDidChange(timing)
             return
         }
         guard isPlaying, chapterAnnouncement == nil else { return }
@@ -462,9 +476,10 @@ final class RSVPEngine {
     func handle(_ event: PacerEvent) {
         guard isPlaying else { return }
         switch event {
-        case .word(let index):
+        case .word(let index, let interval):
             guard words.indices.contains(index), index >= currentIndex else { return }
             movePaced(to: index)
+            currentWordInterval = interval
             chapterAnnouncement = nil
             isChapterTitleVisible = false
             isInSentenceBreak = false

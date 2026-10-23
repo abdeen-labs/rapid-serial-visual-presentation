@@ -46,10 +46,11 @@ nonisolated struct KokoroPhonemeLine: Equatable, Sendable {
     }
 
     /// The runs of words, in order, whose lines fit in `limit` scalars, each
-    /// as long as it can be. A word that alone runs past `limit` is a run of
-    /// its own, to be cut down with ``truncated(_:toLength:)``. Words without
-    /// phonemes go with the run they fall in. Empty only when there are no
-    /// words.
+    /// as long as it can be. Words without phonemes go with the run they
+    /// fall in. A word that alone runs past `limit` is the only word with
+    /// phonemes in its run, though words without them can share it; it's
+    /// cut down to the limit by ``lines(for:limit:)``. Empty only when there
+    /// are no words.
     static func parts(for wordPhonemes: [String], limit: Int) -> [Range<Int>] {
         var parts: [Range<Int>] = []
         var start = 0
@@ -70,6 +71,20 @@ nonisolated struct KokoroPhonemeLine: Equatable, Sendable {
             parts.append(start..<wordPhonemes.count)
         }
         return parts
+    }
+
+    /// The lines to render for words with these phonemes, one for each of
+    /// their ``parts(for:limit:)``, with the words it reads. None is longer
+    /// than `limit`: a word that alone runs past it is cut down with
+    /// ``truncated(_:toLength:)``.
+    static func lines(for wordPhonemes: [String], limit: Int) -> [(words: Range<Int>, line: KokoroPhonemeLine)] {
+        parts(for: wordPhonemes, limit: limit).map { part in
+            // Only a part with one word that has phonemes runs past the
+            // limit. Its other words fit, or have no phonemes and add
+            // nothing, so cutting every word cuts that one alone.
+            let phonemes = wordPhonemes[part].map { truncated($0, toLength: limit) }
+            return (words: part, line: KokoroPhonemeLine(wordPhonemes: phonemes))
+        }
     }
 
     /// `phonemes` cut to at most `limit` scalars: after the last whole group

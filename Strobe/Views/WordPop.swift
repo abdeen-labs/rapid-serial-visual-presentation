@@ -49,7 +49,8 @@ nonisolated enum WordPop {
     /// `wordInterval`: half a base interval (one plain word's time), up to
     /// `maximumDuration`. Words shown for longer pop the same, so the
     /// rhythm stays even; a word shown for less, which complexity timing
-    /// can make of the plainest words, pops for half its own time.
+    /// can make of the plainest words and a voice of its quickest, pops for
+    /// half its own time.
     static func duration(wordsPerMinute: Int, wordInterval: TimeInterval? = nil) -> TimeInterval {
         let baseInterval = 60 / Double(max(1, wordsPerMinute))
         let time = max(0, min(baseInterval, wordInterval ?? baseInterval))

@@ -19,8 +19,10 @@ import os
 /// ``queuedAudioTarget`` of audio is left before it runs out. About 60 times
 /// a second, the pacer asks the player where the listener is and turns it
 /// into events: a word once its start in the unit's ``SpeechSchedule`` has
-/// come, a title or its fade when its unit starts, a sentence break once the
-/// voice falls silent before one, and the end once the last unit has played.
+/// come, with its time until the next word as played, a title or its fade
+/// when its unit starts, a sentence break once the voice falls silent before
+/// one, and the end once the last unit has played. A change to the sentence
+/// break settings plans the breaks again past what the player has.
 ///
 /// Each unit is rendered at the voice speed that reads at the moment's words
 /// per minute, as far as the voice's learned ``VoicePace`` can tell, within
@@ -33,10 +35,26 @@ import os
 ///
 /// Rendering can take a while, most of all the first time after launch,
 /// while the voice model loads and compiles. Reading waits as long as it
-/// takes, on the word or title it started on; only a rendering or playback
-/// failure stops it, sending ``PacerEvent/failed``.
+/// takes, on the word or title it started on; only a failure of the audio
+/// session, a rendering, or playback stops it, sending
+/// ``PacerEvent/failed`` and then calling ``onFailure``.
 final class ReadAloudPacer: WordPacer {
     var onEvent: ((PacerEvent) -> Void)?
+
+    /// What stopped reading aloud.
+    nonisolated enum Failure: Equatable {
+        /// The audio session wouldn't activate, as during a phone call.
+        case audioSession
+        /// The voice couldn't render what comes next.
+        case rendering
+        /// The player wouldn't play, or stopped on its own.
+        case playback
+    }
+
+    /// Called once a failure has stopped reading, after
+    /// ``PacerEvent/failed`` and outside the engine's answer to it, so the
+    /// reader can stop reading aloud and say why.
+    var onFailure: ((Failure) -> Void)?
 
     /// How many spoken units are rendered ahead of the one heard.
     static let spokenUnitsAhead = 2
@@ -74,6 +92,9 @@ final class ReadAloudPacer: WordPacer {
     /// stopped and started again in between.
     private var runID = 0
     private var context: PacerContext?
+    /// The timing settings, for sentence breaks: the context's, then any
+    /// change since.
+    private var timing: ReaderSettings.TimingSnapshot?
     private var chapterStarts: Set<Int> = []
     private var wordsPerMinute = 0
     /// What to plan after the last unit planned; nil once the document's
@@ -120,7 +141,7 @@ final class ReadAloudPacer: WordPacer {
         }
         player.onFailure = { [weak self] error in
             guard let self, self.isRunning else { return }
-            self.fail(error)
+            self.fail(error, as: .playback)
         }
     }
 
@@ -137,6 +158,7 @@ final class ReadAloudPacer: WordPacer {
         isRunning = true
         runID += 1
         self.context = context
+        timing = context.timing
         chapterStarts = Set(context.chapters.keys)
         wordsPerMinute = context.wordsPerMinute
         let start = min(max(context.startIndex, 0), context.words.count)
@@ -146,6 +168,12 @@ final class ReadAloudPacer: WordPacer {
             isSessionReady = false
             let run = runID
             Task { [weak self] in
+                // Reading can stop before the task starts, too early to
+                // deactivate what this would activate. Stopping once it has
+                // started gives up the session's claim, which the session
+                // deactivates after the activation, so nothing more is
+                // needed here; the session is shared with later pacers.
+                guard self?.isRunning == true, self?.runID == run else { return }
                 do {
                     try await session.activate()
                     guard let self, self.isRunning, self.runID == run else { return }
@@ -153,7 +181,7 @@ final class ReadAloudPacer: WordPacer {
                     self.feedPlayer()
                 } catch {
                     guard let self, self.isRunning, self.runID == run else { return }
-                    self.fail(error)
+                    self.fail(error, as: .audioSession)
                 }
             }
         } else {
@@ -191,6 +219,7 @@ final class ReadAloudPacer: WordPacer {
         units = []
         nextStep = nil
         context = nil
+        timing = nil
         lastWordSent = nil
         session?.deactivate()
     }
@@ -219,6 +248,15 @@ final class ReadAloudPacer: WordPacer {
             renderTask = nil
             self.rendering = nil
         }
+        refill()
+    }
+
+    func timingDidChange(_ timing: ReaderSettings.TimingSnapshot) {
+        guard isRunning, let old = self.timing else { return }
+        self.timing = timing
+        guard timing.sentenceBreakEnabled != old.sentenceBreakEnabled
+                || timing.sentenceBreakLength != old.sentenceBreakLength else { return }
+        replanSentenceBreaks()
         refill()
     }
 
@@ -286,7 +324,7 @@ final class ReadAloudPacer: WordPacer {
             let index = script.wordIndices.lowerBound + position
             if lastWordSent.map({ index > $0 }) ?? true {
                 lastWordSent = index
-                guard send(.word(index)) else { return false }
+                guard send(.word(index, interval: interval(ofWordAt: position, in: schedule))) else { return false }
             }
         }
         if time >= schedule.speechEnd, units.count > 1, case .sentenceBreak = units[1].content,
@@ -295,6 +333,17 @@ final class ReadAloudPacer: WordPacer {
             return send(.sentenceBreak)
         }
         return true
+    }
+
+    /// How long the word at `position` in `schedule` shows as played: until
+    /// the next word starts, at the player's speed. Nil for the unit's last
+    /// word, whose time runs on into what follows.
+    private func interval(ofWordAt position: Int, in schedule: SpeechSchedule) -> TimeInterval? {
+        let starts = schedule.startTimes
+        guard position >= 0, position + 1 < starts.count else { return nil }
+        let gap = starts[position + 1] - starts[position]
+        guard gap > 0 else { return nil }
+        return gap / Double(max(player.speed, 0.1))
     }
 
     private func unitPlayedOut(_ id: Int) {
@@ -413,13 +462,38 @@ final class ReadAloudPacer: WordPacer {
     /// for the same word in playback without a voice.
     private func breaksAfter(_ range: Range<Int>, in context: PacerContext) -> Bool {
         let last = range.upperBound - 1
-        guard context.timing.sentenceBreakEnabled, last >= 0, last + 1 < context.words.count else { return false }
+        guard let timing, timing.sentenceBreakEnabled, last >= 0, last + 1 < context.words.count else { return false }
         return RSVPEngine.breaksAfterWord(
             at: last,
             in: context.words,
             nextWordStartsChapter: context.chapters[last + 1] != nil,
-            timing: context.timing
+            timing: timing
         )
+    }
+
+    /// Plans the sentence breaks again after their settings changed. What
+    /// the player has plays as it is, and so does a break that has started.
+    /// Past them, the breaks planned are dropped, and those the settings now
+    /// call for are planned in their place, their silence made anew.
+    private func replanSentenceBreaks() {
+        guard let context else { return }
+        let firstFree = (units.lastIndex(where: \.isEnqueued) ?? -1) + 1
+        var replanned: [Unit] = []
+        for (index, unit) in units.enumerated() {
+            if index >= firstFree, case .sentenceBreak = unit.content, !unit.hasStarted { continue }
+            replanned.append(unit)
+            // A break can follow these words if the player doesn't have
+            // what comes after them yet, and no break that stays does.
+            guard index + 1 >= firstFree, case .words(let script) = unit.content,
+                  breaksAfter(script.wordIndices, in: context) else { continue }
+            if index + 1 < units.count, case .sentenceBreak = units[index + 1].content,
+               units[index + 1].hasStarted {
+                continue
+            }
+            nextUnitID += 1
+            replanned.append(Unit(id: nextUnitID, content: .sentenceBreak))
+        }
+        units = replanned
     }
 
     // MARK: - Rendering
@@ -448,12 +522,16 @@ final class ReadAloudPacer: WordPacer {
     }
 
     /// Starts rendering the first unit without audio, after making the
-    /// silence of any silent units before it.
+    /// silence of any silent units before it. The silence is made while
+    /// another render is under way too, as for a sentence break planned
+    /// after rendered words, so the player isn't kept waiting for it.
     private func renderNext() {
-        guard isRunning, rendering == nil else { return }
+        guard isRunning else { return }
         for unit in units where unit.audio == nil {
             if let script = unit.content.script {
-                render(unit, script: script)
+                if rendering == nil {
+                    render(unit, script: script)
+                }
                 return
             }
             guard makeSilence(for: unit) else { return }
@@ -489,7 +567,7 @@ final class ReadAloudPacer: WordPacer {
         case .success(let rendered):
             speech = rendered
         case .failure(let error):
-            fail(error)
+            fail(error, as: .rendering)
             return
         }
         if let unit = units.first(where: { $0.id == finished.unitID }) {
@@ -530,7 +608,7 @@ final class ReadAloudPacer: WordPacer {
             duration = RSVPEngine.chapterFadeDuration
         case .sentenceBreak:
             duration = RSVPEngine.sentenceBreakInterval(
-                timing: context?.timing ?? ReaderSettings.timingSnapshot(),
+                timing: timing ?? ReaderSettings.timingSnapshot(),
                 baseInterval: 60 / Double(max(1, wordsPerMinute))
             )
         case .title, .words:
@@ -538,7 +616,7 @@ final class ReadAloudPacer: WordPacer {
         }
         let format = silenceFormat ?? AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)
         guard let format, let silence = Self.silence(lasting: duration, in: format) else {
-            fail(ReadAloudError.couldNotMakeSilence)
+            fail(ReadAloudError.couldNotMakeSilence, as: .playback)
             return false
         }
         unit.audio = silence
@@ -584,7 +662,7 @@ final class ReadAloudPacer: WordPacer {
             try player.play()
             isPlayerStarted = true
         } catch {
-            fail(error)
+            fail(error, as: .playback)
         }
     }
 
@@ -621,10 +699,11 @@ final class ReadAloudPacer: WordPacer {
         stop()
     }
 
-    private func fail(_ error: any Error) {
-        Self.logger.error("Reading aloud stopped: \(error)")
+    private func fail(_ error: any Error, as failure: Failure) {
+        Self.logger.error("Reading aloud stopped (\(String(describing: failure))): \(error)")
         send(.failed)
         stop()
+        onFailure?(failure)
     }
 
     private enum ReadAloudError: Error {

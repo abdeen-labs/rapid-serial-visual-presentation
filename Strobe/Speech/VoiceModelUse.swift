@@ -5,8 +5,11 @@ import SwiftUI
 /// reads with it, and frees its memory once nothing does.
 ///
 /// Each reader reading aloud holds it while it shows, and so does its
-/// passage view, which covers it on iOS, and the Read Aloud settings page
-/// (``SwiftUI/View/keepsVoiceModelLoaded(_:)``). Once the last one lets go,
+/// passage view, which covers it on iOS
+/// (``SwiftUI/View/keepsVoiceModelLoaded(_:)``). A voice sample in Settings
+/// holds it while it plays and for a while after, so trying one voice after
+/// another doesn't load it each time (``release(_:after:)``). Holding never
+/// loads the model; reading or a sample does. Once the last one lets go,
 /// the model unloads after ``unloadDelay``, so a reader handing over to its
 /// passage view, or one window to another, doesn't unload it only to load
 /// it again.
@@ -14,17 +17,33 @@ enum VoiceModelUse {
     static let unloadDelay: Duration = .seconds(2)
 
     private static var holders: Set<UUID> = []
+    /// Holders letting go once a delay is up, by holder.
+    private static var pendingReleases: [UUID: Task<Void, Never>] = [:]
     private static var pendingUnload: Task<Void, Never>?
 
     static func hold(_ holder: UUID) {
+        pendingReleases.removeValue(forKey: holder)?.cancel()
         holders.insert(holder)
         pendingUnload?.cancel()
         pendingUnload = nil
     }
 
     static func release(_ holder: UUID) {
+        pendingReleases.removeValue(forKey: holder)?.cancel()
         guard holders.remove(holder) != nil else { return }
         unloadIfUnused()
+    }
+
+    /// Lets go of `holder` once `delay` is up, unless it holds again first.
+    static func release(_ holder: UUID, after delay: Duration) {
+        guard holders.contains(holder) else { return }
+        pendingReleases[holder]?.cancel()
+        pendingReleases[holder] = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            pendingReleases[holder] = nil
+            release(holder)
+        }
     }
 
     /// Downloads the model if it isn't on disk and loads it, as Download
@@ -44,15 +63,14 @@ enum VoiceModelUse {
         pendingUnload?.cancel()
         pendingUnload = Task {
             try? await Task.sleep(for: unloadDelay)
-            // A load under way finishes first, since the model doesn't
-            // unload while it loads; the first one compiles the model for
-            // the device, which later loads keep. A download goes on, and
-            // `install()` looks again once it's done.
-            while !Task.isCancelled, KokoroVoiceModel.shared.state == .preparing {
+            // A download, load, or voice under way finishes first, since the
+            // model doesn't unload while one runs; the first load compiles
+            // the model for the device, which later loads keep.
+            while !Task.isCancelled, KokoroVoiceModel.shared.isBusy {
                 try? await Task.sleep(for: unloadDelay)
             }
             guard !Task.isCancelled, holders.isEmpty else { return }
-            await KokoroVoiceModel.shared.unload()
+            KokoroVoiceModel.shared.unload()
         }
     }
 }
