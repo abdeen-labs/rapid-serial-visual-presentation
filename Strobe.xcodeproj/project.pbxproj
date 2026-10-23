@@ -10,6 +10,7 @@
 		5A4E00000000000000000002 /* StrobeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5A4E00000000000000000001 /* StrobeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7D1D6E00000000000000000D /* StrobeWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7D1D6E000000000000000001 /* StrobeWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E49D53FB2F6760E300AFC126 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E49D53FA2F6760E300AFC126 /* PrivacyInfo.xcprivacy */; };
+		5B0A00000000000000000002 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5B0A00000000000000000001 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -174,6 +175,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5B0A00000000000000000002 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -278,6 +280,7 @@
 			);
 			name = Strobe;
 			packageProductDependencies = (
+				5B0A00000000000000000001 /* FluidAudio */,
 			);
 			productName = Strobe;
 			productReference = E44F01FB2F4047FB00D04D31 /* Strobe.app */;
@@ -340,6 +343,9 @@
 			);
 			mainGroup = E44F01F22F4047FB00D04D31;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5B0A00000000000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E44F01FC2F4047FB00D04D31 /* Products */;
 			projectDirPath = "";
@@ -973,6 +979,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5B0A00000000000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = exactVersion;
+				version = 0.17.7;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5B0A00000000000000000001 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5B0A00000000000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E44F01F32F4047FB00D04D31 /* Project object */;
 }

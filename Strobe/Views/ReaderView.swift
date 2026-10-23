@@ -9,12 +9,14 @@ import AppKit
 /// The RSVP reading interface — displays words one at a time.
 ///
 /// Gesture-driven: hold to play (or tap to toggle, when `holdToReadEnabled`
-/// is off), release to pause, swipe to scrub, two fingers to read hands-free
-/// (see ``ReaderTouch``). Paused, a top bar holds Back, the title, View
-/// Text, and the speed slider, and a bottom panel holds chapter navigation
-/// (when chapters exist) and the progress bar with the time left; both fade
-/// out while reading. Shows a completion card at the end. Persists reading state
-/// on disappear and scene phase changes.
+/// is off or a voice reads aloud), release to pause, swipe to scrub, two
+/// fingers to read hands-free (see ``ReaderTouch``). Paused, a top bar holds
+/// Back, the title, Read Aloud, View Text, and the speed slider, and a
+/// bottom panel holds chapter navigation (when chapters exist) and the
+/// progress bar with the time left; both fade out while reading. With
+/// reading aloud on, a voice paces the words (``ReadAloudController``).
+/// Shows a completion card at the end. Persists reading state on disappear
+/// and scene phase changes.
 struct ReaderView: View {
     private let navFadeDuration: Double = 0.3
     private let playIntentDelay: TimeInterval = 0.12
@@ -43,8 +45,12 @@ struct ReaderView: View {
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
     @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
+    @AppStorage(ReaderSettings.Keys.readAloudEnabled) private var readAloudEnabled: Bool = ReaderSettings.Defaults.readAloudEnabled
+    @AppStorage(ReaderSettings.Keys.readAloudVoice) private var readAloudVoice: String = ReaderSettings.Defaults.readAloudVoice
     @Bindable var document: Document
     @State private var engine: RSVPEngine
+    @State private var readAloud = ReadAloudController()
+    @State private var readAloudPrompt: ReadAloudPrompt?
     @State private var isTouching = false
     @State private var scrubAccumulator: CGFloat = 0
     @State private var touchMode: ReaderTouch.Mode = .undecided
@@ -314,15 +320,24 @@ struct ReaderView: View {
         .task(id: ReadingPace.shared.key(for: document)) {
             ReadingPace.shared.prepare(document)
         }
+        // Reading aloud follows its settings and the voice model's download
+        // while the reader is open.
+        .task(id: readAloudSetup) {
+            if KokoroVoiceModel.isSupported {
+                await readAloud.update(readAloudSetup, engine: engine)
+            }
+        }
         .onAppear {
             readerFocused = true
             AppRouter.shared.readerDidAppear(documentID: document.id)
         }
         .marksDocumentOpen(document.id)
+        .keepsVoiceModelLoaded(readAloud.usesVoiceModel)
         // Re-assert keyboard focus whenever any overlay (passage view, chapter
-        // picker, save-error alert) closes, so Space/arrow shortcuts keep
-        // working on macOS. One derived flag covers all presentations — adding
-        // a new one only requires extending `isPresentingOverlay`.
+        // picker, save-error or read-aloud alert) closes, so Space/arrow
+        // shortcuts keep working on macOS. One derived flag covers all
+        // presentations — adding a new one only requires extending
+        // `isPresentingOverlay`.
         .onChange(of: isPresentingOverlay) { _, isPresenting in
             if !isPresenting { readerFocused = true }
         }
@@ -331,6 +346,7 @@ struct ReaderView: View {
             AppRouter.shared.readerDidDisappear(documentID: document.id)
         }
         .onChange(of: scenePhase) { _, newPhase in
+            readAloud.isInForeground = newPhase == .active
             if newPhase == .inactive || newPhase == .background {
                 // Pause as well as persist — words advancing while the app is
                 // covered (Notification Center, app switcher, a call) are
@@ -355,8 +371,12 @@ struct ReaderView: View {
         }
         .onChange(of: engine.isPlaying) { wasPlaying, isNowPlaying in
             // Any pause ends hands-free reading: a tap, Space, the scene
-            // going inactive, the last word.
-            if !isNowPlaying { isHandsFree = false }
+            // going inactive, the last word. A voice that got ready while
+            // the words played reads from here.
+            if !isNowPlaying {
+                isHandsFree = false
+                readAloud.playbackDidPause()
+            }
             if wasPlaying && !isNowPlaying && engine.isAtEnd {
                 HapticManager.shared.completedReading()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
@@ -367,9 +387,9 @@ struct ReaderView: View {
                 }
             }
         }
-        .onChange(of: engine.wordsPerMinute) { _, newValue in
-            // A speed set another way (VoiceOver's adjust actions) moves the
-            // slider with it.
+        .onChange(of: engine.effectiveWordsPerMinute) { _, newValue in
+            // A speed set another way (VoiceOver's adjust actions, reading
+            // aloud's cap) moves the slider with it.
             if !isAdjustingWPM { wpmSliderValue = Double(newValue) }
         }
         .onChange(of: smartTimingEnabled) { _, newValue in
@@ -412,11 +432,13 @@ struct ReaderView: View {
         } message: {
             Text(persistenceError ?? "")
         }
+        .readAloudPrompts($readAloudPrompt, isEnabled: $readAloudEnabled, controller: readAloud)
         #if os(iOS)
         .fullScreenCover(isPresented: $showPassage) {
             // The cover hides the reader, which counts as closing it.
             PassageView(document: document, engine: engine)
                 .marksDocumentOpen(document.id)
+                .keepsVoiceModelLoaded(readAloud.usesVoiceModel)
         }
         #elseif os(macOS)
         .sheet(isPresented: $showPassage) {
@@ -470,7 +492,7 @@ struct ReaderView: View {
     /// True while any focus-stealing presentation is up. Used to restore
     /// keyboard focus when the last one closes.
     private var isPresentingOverlay: Bool {
-        showPassage || showChapterPicker || persistenceError != nil
+        showPassage || showChapterPicker || persistenceError != nil || readAloudPrompt != nil
     }
 
     // MARK: - Unified gesture
@@ -486,7 +508,7 @@ struct ReaderView: View {
                     isTouching = true
                     touchMode = .undecided
                     scrubAccumulator = 0
-                    if holdToReadEnabled {
+                    if holdsToRead {
                         schedulePlayIntent()
                     }
                 }
@@ -585,9 +607,14 @@ struct ReaderView: View {
         apply(outcome)
     }
 
+    /// Whether a touch holds to read. Reading aloud, a tap plays and pauses.
+    private var holdsToRead: Bool {
+        ReaderTouch.holdsToRead(setting: holdToReadEnabled, readsAloud: readAloud.isReadingAloud)
+    }
+
     private var touchSituation: ReaderTouch.Situation {
         ReaderTouch.Situation(
-            holdToRead: holdToReadEnabled,
+            holdToRead: holdsToRead,
             isPlaying: engine.isPlaying,
             isAtEnd: engine.isAtEnd,
             isHandsFree: isHandsFree,
@@ -691,11 +718,11 @@ struct ReaderView: View {
 
     // MARK: - Top bar
 
-    /// Back, the title, and View Text, laid out like a navigation bar, over
-    /// the speed. Speed sits up here rather than in the bottom panel so the
-    /// two bars stay about the same height: the word's line has to clear
-    /// both on the smallest screens, and the marks above the word get the
-    /// room to the nearer bar.
+    /// Back, the title, Read Aloud, and View Text, laid out like a
+    /// navigation bar, over the speed. Speed sits up here rather than in
+    /// the bottom panel so the two bars stay about the same height: the
+    /// word's line has to clear both on the smallest screens, and the marks
+    /// above the word get the room to the nearer bar.
     private var topBar: some View {
         VStack(spacing: 0) {
             navigationRow
@@ -727,6 +754,13 @@ struct ReaderView: View {
                 // The completion card shows the title itself.
                 .opacity(showCompletion ? 0 : 1)
                 .accessibilityAddTraits(.isHeader)
+
+            // Only a device that can run the voice model reads aloud.
+            if KokoroVoiceModel.isSupported {
+                ReadAloudButton(controller: readAloud, isEnabled: readAloudEnabled) { tap in
+                    readAloudButtonTapped(tap)
+                }
+            }
 
             ReaderGlassButton(systemImage: "text.alignleft", accessibilityLabel: "View Text") {
                 showPassage = true
@@ -801,7 +835,7 @@ struct ReaderView: View {
 
             // Continuous, rounding to steps itself: a stepped slider marks
             // each of the 91 steps with a tick on iOS 26 and later.
-            Slider(value: steppedWPMSliderValue, in: ReaderSettings.wpmRange) {
+            Slider(value: steppedWPMSliderValue, in: speedRange) {
                 Text("Speed")
             } minimumValueLabel: {
                 Image(systemName: "tortoise.fill")
@@ -837,6 +871,12 @@ struct ReaderView: View {
                 }
             }
         }
+    }
+
+    /// The speeds the slider offers: up to reading aloud's cap while a
+    /// voice reads.
+    private var speedRange: ClosedRange<Double> {
+        readAloud.isReadingAloud ? ReaderSettings.readAloudWPMRange : ReaderSettings.wpmRange
     }
 
     /// The speed slider's value, held to whole `wpmStep`s.
@@ -914,18 +954,48 @@ struct ReaderView: View {
     // so only paused-state hints exist.
     private var hintText: String {
         #if os(macOS)
-        return holdSpeedAdjustEnabled
+        return holdSpeedAdjustEnabled && !readAloud.isReadingAloud
             ? "Press Space to read, arrows to scrub · click-drag up/down for speed"
             : "Press Space to read, arrows to scrub"
         #else
-        guard holdToReadEnabled else { return "Tap to read" }
+        guard holdsToRead else { return "Tap to read" }
         let hold = holdSpeedAdjustEnabled ? "Hold to read · drag up/down for speed" : "Hold to read"
         return hold + "\nTwo-finger tap to read hands-free"
         #endif
     }
 
+    /// The speed shown: the slider's while it's dragged, else the speed
+    /// playback runs at, held to reading aloud's cap.
     private var displayedWPM: Int {
-        isAdjustingWPM ? Int(wpmSliderValue) : engine.wordsPerMinute
+        isAdjustingWPM ? Int(wpmSliderValue) : engine.effectiveWordsPerMinute
+    }
+
+    // MARK: - Reading aloud
+
+    private var readAloudSetup: ReadAloudController.Setup {
+        readAloud.setup(
+            isEnabled: readAloudEnabled,
+            isLoaded: isLoaded,
+            voice: KokoroVoices.chosen(readAloudVoice).id
+        )
+    }
+
+    private func readAloudButtonTapped(_ tap: ReadAloudAvailability.Tap) {
+        switch tap {
+        case .turnOn:
+            readAloudEnabled = true
+        case .turnOff:
+            readAloudEnabled = false
+        case .offerDownload:
+            readAloudPrompt = .download
+        case .retry:
+            readAloudEnabled = true
+            readAloud.retry()
+        case .explainEnglishOnly:
+            readAloudPrompt = .englishOnly
+        case .explainFailure(let message):
+            readAloudPrompt = .failure(message: message)
+        }
     }
 
     // MARK: - Persistence
@@ -968,7 +1038,9 @@ struct ReaderView: View {
 
     private func applyWPM(_ value: Int, withHaptic: Bool) {
         let clamped = max(1, value)
-        guard clamped != engine.wordsPerMinute else { return }
+        // Against the speed shown, so leaving the slider at reading aloud's
+        // cap keeps a faster speed saved for reading without a voice.
+        guard clamped != engine.effectiveWordsPerMinute else { return }
         engine.wordsPerMinute = clamped
         document.wordsPerMinute = value
         if withHaptic {
@@ -976,14 +1048,14 @@ struct ReaderView: View {
         }
     }
 
-    /// Steps the configured speed by ±`wpmStep`, clamped to `wpmRange`. The
+    /// Steps the speed shown by ±`wpmStep`, clamped to the slider's range. The
     /// accessible, touch-mode-independent equivalent of the hold-to-read speed
     /// drag — the WPM slider is hidden during playback, so VoiceOver / Switch
     /// Control users and tap-to-read users otherwise have no in-playback path.
     private func nudgeSpeed(by delta: Int) {
-        let lower = Int(ReaderSettings.wpmRange.lowerBound)
-        let upper = Int(ReaderSettings.wpmRange.upperBound)
-        let target = min(upper, max(lower, engine.wordsPerMinute + delta))
+        let lower = Int(speedRange.lowerBound)
+        let upper = Int(speedRange.upperBound)
+        let target = min(upper, max(lower, engine.effectiveWordsPerMinute + delta))
         applyWPM(target, withHaptic: true)
     }
 }

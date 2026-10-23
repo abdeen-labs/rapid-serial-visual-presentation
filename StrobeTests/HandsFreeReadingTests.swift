@@ -140,4 +140,24 @@ struct HandsFreeReadingTests {
         #expect(ReaderTouch.cancellation(of: .undecided, in: Self.tapPaused, detection: .unavailable) == .unchanged)
         #expect(ReaderTouch.cancellation(of: .undecided, in: Self.tapPlaying, detection: .unavailable) == .unchanged)
     }
+
+    // MARK: - Reading aloud
+
+    @Test func readingAloudTurnsHoldToReadOff() {
+        #expect(ReaderTouch.holdsToRead(setting: true, readsAloud: false))
+        #expect(!ReaderTouch.holdsToRead(setting: true, readsAloud: true))
+        #expect(!ReaderTouch.holdsToRead(setting: false, readsAloud: false))
+        #expect(!ReaderTouch.holdsToRead(setting: false, readsAloud: true))
+    }
+
+    @Test func aTapPlaysAndPausesWhileReadingAloud() {
+        let holdToRead = ReaderTouch.holdsToRead(setting: true, readsAloud: true)
+        let paused = Situation(holdToRead: holdToRead, isPlaying: false, isAtEnd: false)
+        let playing = Situation(holdToRead: holdToRead, isPlaying: true, isAtEnd: false)
+        #expect(ReaderTouch.release(of: .undecided, in: paused) == .play)
+        #expect(ReaderTouch.release(of: .undecided, in: playing) == .pause)
+        // Two fingers count as a tap too, rather than reading hands-free.
+        #expect(ReaderTouch.secondFinger(in: paused) == .play)
+        #expect(ReaderTouch.secondFinger(in: playing) == .pause)
+    }
 }

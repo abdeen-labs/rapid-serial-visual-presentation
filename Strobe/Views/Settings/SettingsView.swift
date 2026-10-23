@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// App settings: a grouped form in a sheet on iOS, with timing and the
-/// while-reading options on their own pages; a tabbed Settings window on
-/// macOS. Both are built from the same sections.
+/// App settings: a grouped form in a sheet on iOS, with timing, the
+/// while-reading options, and reading aloud on their own pages; a tabbed
+/// Settings window on macOS. Both are built from the same sections. The
+/// Read Aloud page shows only on a device that can run the voice model
+/// (``KokoroVoiceModel/isSupported``).
 struct SettingsView: View {
     @State private var showWelcome = false
     #if os(iOS)
@@ -32,6 +34,15 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Display", systemImage: "eye") }
+
+            if KokoroVoiceModel.isSupported {
+                Form {
+                    ReadAloudSettingsSections()
+                }
+                .formStyle(.grouped)
+                .keepsVoiceModelLoaded()
+                .tabItem { Label("Read Aloud", systemImage: "speaker.wave.2") }
+            }
 
             Form {
                 ReadingControlsSection()
@@ -64,6 +75,14 @@ struct SettingsView: View {
                     NavigationLink("While Reading") {
                         SettingsPage(title: "While Reading") {
                             WhileReadingSections()
+                        }
+                    }
+                    if KokoroVoiceModel.isSupported {
+                        NavigationLink("Read Aloud") {
+                            SettingsPage(title: "Read Aloud") {
+                                ReadAloudSettingsSections()
+                            }
+                            .keepsVoiceModelLoaded()
                         }
                     }
                 }

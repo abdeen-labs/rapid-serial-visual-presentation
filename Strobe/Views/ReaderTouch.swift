@@ -59,6 +59,13 @@ nonisolated enum ReaderTouch {
         case readHandsFree
     }
 
+    /// Whether a touch holds to read: the Hold to Read setting, except while
+    /// reading aloud. Letting go of a hold would cut the voice off
+    /// mid-sentence, so there a tap plays and pauses instead.
+    static func holdsToRead(setting: Bool, readsAloud: Bool) -> Bool {
+        setting && !readsAloud
+    }
+
     /// What lifting the finger does.
     static func release(of mode: Mode, in situation: Situation) -> Outcome {
         guard mode != .twoFinger else { return .unchanged }

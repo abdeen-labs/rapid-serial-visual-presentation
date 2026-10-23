@@ -10,6 +10,10 @@ import Foundation
 /// sentence breaks on, a blank screen follows each sentence's last word; see
 /// ``SentenceBreak``.
 ///
+/// With a ``pacer`` set, as while reading aloud, the pacer moves playback
+/// from word to word instead of the timer, and the per-word timing settings
+/// don't apply.
+///
 /// Conforms to `@Observable` so SwiftUI views automatically update when
 /// `currentIndex`, `isPlaying`, or settings change.
 @Observable
@@ -57,9 +61,32 @@ final class RSVPEngine {
 
     /// The display time the current word got when playback reached it, so
     /// the word's pop can fit inside it (see ``WordPop``); nil before
-    /// playback times a word. Not observed: it changes with the word, which
-    /// views already follow.
+    /// playback times a word, and while a ``pacer`` moves playback. Not
+    /// observed: it changes with the word, which views already follow.
     @ObservationIgnored private(set) var currentWordInterval: TimeInterval?
+
+    /// Moves playback in place of the timer while set, as reading aloud
+    /// does: `play()` starts it, `pause()` stops it, and its events come in
+    /// through ``handle(_:)``. Replacing it pauses playback and stops the
+    /// pacer it replaces.
+    @ObservationIgnored var pacer: (any WordPacer)? {
+        willSet {
+            guard newValue !== pacer else { return }
+            if isPlaying { pause() }
+        }
+        didSet {
+            guard oldValue !== pacer else { return }
+            oldValue?.onEvent = nil
+            oldValue?.stop()
+            pacer?.onEvent = { [weak self] event in
+                self?.handle(event)
+            }
+        }
+    }
+
+    /// The speed the pacer was last given, so a settings change that leaves
+    /// the speed alone doesn't reach it.
+    @ObservationIgnored private var pacedWordsPerMinute: Int?
 
     /// The target reading speed. Changing this during playback reschedules the timer.
     var wordsPerMinute: Int {
@@ -72,10 +99,18 @@ final class RSVPEngine {
         didSet { onPlaybackSettingChanged() }
     }
 
+    /// The fastest playback may run, whatever the speed and the hold
+    /// override say: reading aloud caps it at
+    /// ``ReaderSettings/readAloudWPMRange``'s top. Nil leaves the speed as
+    /// it is.
+    var speedCap: Int? {
+        didSet { onPlaybackSettingChanged() }
+    }
+
     /// The speed playback actually runs at: the hold override if one is
-    /// active, otherwise the configured speed.
+    /// active, otherwise the configured speed, held to ``speedCap``.
     var effectiveWordsPerMinute: Int {
-        wpmOverride ?? wordsPerMinute
+        min(wpmOverride ?? wordsPerMinute, speedCap ?? .max)
     }
 
     /// When enabled, longer words are displayed for proportionally more time.
@@ -248,20 +283,45 @@ final class RSVPEngine {
     }
 
     /// Starts playback from the current position. No-op if already playing,
-    /// at the end, or if no words are loaded.
+    /// at the end, or if no words are loaded. With a ``pacer``, starts it
+    /// instead of announcing a chapter or timing the word.
     func play() {
         guard !isPlaying, !words.isEmpty, !isAtEnd else { return }
         isPlaying = true
+        if let pacer {
+            currentWordInterval = nil
+            let context = pacerContext()
+            pacedWordsPerMinute = context.wordsPerMinute
+            pacer.start(context)
+            return
+        }
         if !announceChapterIfNeeded() { scheduleNextWord() }
     }
 
-    /// Stops playback, invalidates the timer, and discards any hold-to-read
-    /// speed override so the next play resumes at the configured speed.
-    /// Pausing during a chapter announcement moves the position past the
-    /// words its title stands in for.
+    /// Where the pacer starts reading and what it needs to know to read
+    /// on, from the engine's state.
+    private func pacerContext() -> PacerContext {
+        PacerContext(
+            words: words,
+            startIndex: currentIndex,
+            chapters: chaptersByIndex,
+            readingStarts: readingStarts,
+            // The rule `announceChapterIfNeeded()` follows.
+            announcesChapterAtStart: lastAnnouncedIndex != currentIndex
+                && chaptersByIndex[currentIndex] != nil,
+            wordsPerMinute: effectiveWordsPerMinute,
+            timing: timing
+        )
+    }
+
+    /// Stops playback, invalidates the timer (or stops the pacer), and
+    /// discards any hold-to-read speed override so the next play resumes at
+    /// the configured speed. Pausing during a chapter announcement moves the
+    /// position past the words its title stands in for.
     func pause() {
         isPlaying = false
         stopTimer()
+        pacer?.stop()
         if let chapter = chapterAnnouncement {
             currentIndex = readingStart(ofChapterAt: chapter.wordIndex)
         }
@@ -299,6 +359,14 @@ final class RSVPEngine {
     }
 
     private func onPlaybackSettingChanged() {
+        if let pacer {
+            // The voice times each word itself, so only the speed reaches it.
+            let speed = effectiveWordsPerMinute
+            guard isPlaying, speed != pacedWordsPerMinute else { return }
+            pacedWordsPerMinute = speed
+            pacer.speedDidChange(wordsPerMinute: speed)
+            return
+        }
         guard isPlaying, chapterAnnouncement == nil else { return }
         // During a blank the deadline belongs to the blank, not to the word
         // still at `currentIndex`.
@@ -386,6 +454,53 @@ final class RSVPEngine {
         } else {
             pause()
         }
+    }
+
+    /// Takes an event from the ``pacer``, which moves playback the way
+    /// ``advance()`` does for the timer. Ignored while paused, so an event
+    /// already on its way when playback paused changes nothing.
+    func handle(_ event: PacerEvent) {
+        guard isPlaying else { return }
+        switch event {
+        case .word(let index):
+            guard words.indices.contains(index), index >= currentIndex else { return }
+            movePaced(to: index)
+            chapterAnnouncement = nil
+            isChapterTitleVisible = false
+            isInSentenceBreak = false
+        case .chapterTitle(let index, let isVisible):
+            guard index >= currentIndex, let chapter = chaptersByIndex[index] else { return }
+            movePaced(to: index)
+            isInSentenceBreak = false
+            chapterAnnouncement = chapter
+            isChapterTitleVisible = isVisible
+            lastAnnouncedIndex = index
+        case .sentenceBreak:
+            isInSentenceBreak = true
+        case .finished:
+            // On the last word, so the reader shows that the document is done.
+            if !words.isEmpty { movePaced(to: words.count - 1) }
+            chapterAnnouncement = nil
+            isChapterTitleVisible = false
+            isInSentenceBreak = false
+            pause()
+        case .failed:
+            pause()
+        }
+    }
+
+    /// Moves playback forward to `index` for the pacer, counting the words
+    /// passed as played the way ``advance()`` does. During a chapter
+    /// announcement, the words its title stands in for don't count.
+    private func movePaced(to index: Int) {
+        guard index >= currentIndex else { return }
+        var countedFrom = currentIndex
+        if let chapter = chapterAnnouncement {
+            countedFrom = max(countedFrom, readingStart(ofChapterAt: chapter.wordIndex))
+        }
+        playedWordCount += max(0, index - countedFrom)
+        currentIndex = index
+        furthestPlayedIndex = max(furthestPlayedIndex, index)
     }
 
     private func breaksAfterCurrentWord() -> Bool {

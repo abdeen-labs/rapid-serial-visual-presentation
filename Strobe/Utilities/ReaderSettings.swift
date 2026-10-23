@@ -35,6 +35,8 @@ enum ReaderSettings {
         nonisolated static let enclosingMarksSize = "enclosingMarksSize"
         nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
         nonisolated static let wordPopEnabled = "wordPopEnabled"
+        nonisolated static let readAloudEnabled = "readAloudEnabled"
+        nonisolated static let readAloudVoice = "readAloudVoice"
         nonisolated static let iCloudSyncEnabled = "iCloudSyncEnabled"
 
         // App-level flags (not reader settings, but registered here so key
@@ -82,6 +84,11 @@ enum ReaderSettings {
         /// `EnclosingMarksLayout.opacity(level:tone:)`.
         nonisolated static let enclosingMarksOpacity = 0.5
         nonisolated static let wordPopEnabled = false
+        nonisolated static let readAloudEnabled = false
+        /// A Kokoro voice name: ``KokoroVoices/defaultVoice``. A stored
+        /// name the catalog doesn't offer, such as a voice identifier from
+        /// before, reads as this one (``KokoroVoices/chosen(_:)``).
+        nonisolated static let readAloudVoice = "af_heart"
         /// Off, so nothing syncs without a stored yes. Launch stores the
         /// real starting choice once: on for a fresh install, off and asked
         /// for anyone who used Strobe before (`SyncConsent.storeLaunchChoice`).
@@ -93,6 +100,9 @@ enum ReaderSettings {
     /// can never drift between call sites.
     nonisolated static let wpmRange: ClosedRange<Double> = 100...1000
     nonisolated static let wpmStep: Double = 10
+    /// The speeds reading aloud allows. Speech much past 450 wpm stops
+    /// being comfortable to follow, so reading aloud caps the speed there.
+    nonisolated static let readAloudWPMRange: ClosedRange<Double> = 100...450
 
     /// The engine-relevant timing settings, read directly from UserDefaults.
     /// Nonisolated so words can be timed off the main actor (see
