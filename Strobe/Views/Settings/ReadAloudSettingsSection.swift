@@ -33,16 +33,24 @@ struct ReadAloudSettingsSections: View {
         }
 
         if let size = removableSize {
+            // A download that didn't finish left no voice to remove, only
+            // what it got.
+            let unfinished = model.isDownloadUnfinished
+            let title = unfinished ? "Remove Unfinished Download" : "Remove Voice"
             Section {
-                Button("Remove Voice (\(Self.formatted(size)))", role: .destructive) {
+                Button("\(title) (\(Self.formatted(size)))", role: .destructive) {
                     confirmsRemoval = true
                 }
-                .confirmationDialog("Remove Voice?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
-                    Button("Remove Voice", role: .destructive) {
+                .confirmationDialog("\(title)?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
+                    Button(title, role: .destructive) {
                         remove()
                     }
                 } message: {
-                    Text("This frees \(Self.formatted(size)). Reading aloud turns off until you download the voice again.")
+                    if unfinished {
+                        Text("This frees \(Self.formatted(size)). Reading aloud turns off until you download the voice.")
+                    } else {
+                        Text("This frees \(Self.formatted(size)). Reading aloud turns off until you download the voice again.")
+                    }
                 }
             }
         }

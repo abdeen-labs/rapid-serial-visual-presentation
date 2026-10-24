@@ -99,6 +99,10 @@ final class KokoroVoiceModel {
     /// clear it.
     private(set) var installedSize: Int64?
 
+    /// Whether ``installedSize`` is what a download that didn't finish
+    /// left, rather than an install's.
+    private(set) var isDownloadUnfinished = false
+
     /// The folder the model goes in.
     @ObservationIgnored let directory: URL
     @ObservationIgnored private let version: KokoroAneVersion
@@ -268,6 +272,7 @@ final class KokoroVoiceModel {
             try Self.writeInstallation(Installation(sharesCompiledWeights: shares), in: directory)
             vocabulary = try Self.loadVocabulary(in: directory)
             installedSize = await Self.measuredSizeOffMain(of: directory, sharesWeights: shares)
+            isDownloadUnfinished = false
             guard generation == self.generation else { return }
             state = .ready
         } catch {
@@ -360,6 +365,7 @@ final class KokoroVoiceModel {
         switch state {
         case .notInstalled, .failed:
             installedSize = size
+            isDownloadUnfinished = size != nil
         case .downloading, .installed, .preparing, .ready:
             break
         }
@@ -568,6 +574,7 @@ final class KokoroVoiceModel {
     private func deleteFiles() async {
         startOver()
         installedSize = nil
+        isDownloadUnfinished = false
         let directory = directory
         await Self.deleteFiles(in: directory)
     }
