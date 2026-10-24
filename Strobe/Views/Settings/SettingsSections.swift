@@ -470,6 +470,9 @@ struct ImportSettingsSection: View {
 struct AboutSection: View {
     @Binding var showWelcome: Bool
     @Binding var showWhatsNew: Bool
+    #if os(macOS)
+    @State private var showAcknowledgements = false
+    #endif
 
     var body: some View {
         Section {
@@ -483,8 +486,21 @@ struct AboutSection: View {
                 }
                 .tint(.primary)
             }
-            externalLink("Rate Strobe", url: Self.writeReviewURL)
-            externalLink("Source Code", url: URL(string: "https://github.com/abdeen-labs/rapid-serial-visual-presentation")!)
+            ExternalLinkRow(title: "Rate Strobe", url: Self.writeReviewURL)
+            ExternalLinkRow(title: "Source Code", url: URL(string: "https://github.com/abdeen-labs/rapid-serial-visual-presentation")!)
+            #if os(macOS)
+            Button("Acknowledgements") {
+                showAcknowledgements = true
+            }
+            .tint(.primary)
+            .sheet(isPresented: $showAcknowledgements) {
+                AcknowledgementsSheet()
+            }
+            #else
+            NavigationLink("Acknowledgements") {
+                AcknowledgementsView()
+            }
+            #endif
         } footer: {
             Text(appVersionLabel)
         }
@@ -499,7 +515,19 @@ struct AboutSection: View {
         #endif
     }()
 
-    private func externalLink(_ title: String, url: URL) -> some View {
+    private var appVersionLabel: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "x.x"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "x"
+        return "Strobe \(version) (\(build))"
+    }
+}
+
+/// A settings row that opens a web page, marked with an arrow.
+struct ExternalLinkRow: View {
+    let title: String
+    let url: URL
+
+    var body: some View {
         Link(destination: url) {
             HStack {
                 Text(title)
@@ -511,11 +539,5 @@ struct AboutSection: View {
             }
         }
         .tint(.primary)
-    }
-
-    private var appVersionLabel: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "x.x"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "x"
-        return "Strobe \(version) (\(build))"
     }
 }

@@ -117,4 +117,4 @@ Issues and pull requests are welcome. Keep changes focused, include tests when y
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE). The fonts, FluidAudio, and the Kokoro voice model keep their own licenses: see [Third-Party Notices](THIRD_PARTY_NOTICES.md), or Settings ▸ About ▸ Acknowledgements in the app.
