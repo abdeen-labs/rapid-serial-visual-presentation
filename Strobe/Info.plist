@@ -24,9 +24,12 @@
 		<string>Inter-Bold.ttf</string>
 		<string>JetBrainsMono-Regular.ttf</string>
 		<string>JetBrainsMono-Bold.ttf</string>
-		<string>PTSans.ttc</string>
-		<string>PTSerif.ttc</string>
-		<string>PTMono.ttc</string>
+		<string>PTSans-Regular.ttf</string>
+		<string>PTSans-Bold.ttf</string>
+		<string>PTSerif-Regular.ttf</string>
+		<string>PTSerif-Bold.ttf</string>
+		<string>PTMono-Regular.ttf</string>
+		<string>PTMono-Bold.ttf</string>
 		<string>SpaceGrotesk-Variable.ttf</string>
 	</array>
 	<key>UIBackgroundModes</key>
