@@ -4,7 +4,7 @@ import SwiftUI
 /// captions of short videos: it starts a little small, grows a little past
 /// its size, and settles. It scales around its anchor letter, so the
 /// fixation point never moves, and only the word pops: the guide line and
-/// the neighbours hold still. Under Reduce Motion it fades in instead.
+/// the neighbours hold still. Reduce Motion turns it off.
 nonisolated enum WordPop {
     /// What a word view needs to pop its word.
     struct Cue: Equatable {
@@ -25,8 +25,6 @@ nonisolated enum WordPop {
         case still
         /// The word grows in, a little past its size, and settles.
         case pop
-        /// The word fades in, for Reduce Motion.
-        case fade
     }
 
     /// The size a word pops in at, as a fraction of its own.
@@ -35,8 +33,6 @@ nonisolated enum WordPop {
     static let peakScale: CGFloat = 1.06
     /// The share of a pop spent growing to `peakScale`.
     static let riseFraction: Double = 0.55
-    /// The opacity a word fades in from under Reduce Motion.
-    static let fadeStartOpacity: Double = 0.4
 
     /// The share of a word's time a pop takes, so the word holds still for
     /// the rest of it, even at the top speed.
@@ -57,9 +53,10 @@ nonisolated enum WordPop {
         return min(maximumDuration, time * intervalFraction)
     }
 
-    /// How a word that shows while playing comes in.
+    /// How a word that shows while playing comes in: it pops, unless Reduce
+    /// Motion is on.
     static func style(reduceMotion: Bool) -> Style {
-        reduceMotion ? .fade : .pop
+        reduceMotion ? .still : .pop
     }
 
     /// The reader's cue for its word at `index`, shown for `wordInterval`.
@@ -103,15 +100,14 @@ nonisolated enum WordPop {
     /// One moment of a pop.
     struct Frame {
         var scale: CGFloat
-        var opacity: Double
 
-        static let rest = Frame(scale: 1, opacity: 1)
+        static let rest = Frame(scale: 1)
     }
 
     /// The pop `cue` starts. A pop eases out from `startScale` to
-    /// `peakScale`, then eases back to full size; a fade eases out from
-    /// `fadeStartOpacity`. Either starts at once, whatever was showing, so
-    /// a word that comes before the last one settled still pops.
+    /// `peakScale`, then eases back to full size. It starts at once,
+    /// whatever was showing, so a word that comes before the last one
+    /// settled still pops.
     @KeyframesBuilder<Frame>
     static func keyframes(for cue: Cue) -> some Keyframes<Frame> {
         KeyframeTrack(\.scale) {
@@ -124,19 +120,6 @@ nonisolated enum WordPop {
                     endVelocity: 0
                 )
                 CubicKeyframe(1, duration: cue.settleDuration, startVelocity: 0, endVelocity: 0)
-            } else {
-                MoveKeyframe(1)
-            }
-        }
-        KeyframeTrack(\.opacity) {
-            if cue.style == .fade {
-                MoveKeyframe(fadeStartOpacity)
-                CubicKeyframe(
-                    1,
-                    duration: cue.duration,
-                    startVelocity: easeOutVelocity(from: fadeStartOpacity, to: 1, over: cue.duration),
-                    endVelocity: 0
-                )
             } else {
                 MoveKeyframe(1)
             }
@@ -169,7 +152,6 @@ struct WordPopEffect: ViewModifier {
             content.keyframeAnimator(initialValue: WordPop.Frame.rest, trigger: cue.trigger) { [anchor] word, frame in
                 word
                     .scaleEffect(frame.scale, anchor: anchor)
-                    .opacity(frame.opacity)
             } keyframes: { _ in
                 WordPop.keyframes(for: cue)
             }

@@ -181,12 +181,18 @@ struct ReadingAppearanceSection: View {
                 Text("Pure black behind the words, for reading in the dark")
             }
 
-            Toggle(isOn: $wordPopEnabled) {
+            // Reduce Motion holds it off without changing the stored choice,
+            // which comes back when Reduce Motion is turned off.
+            Toggle(isOn: Binding(
+                get: { wordPopEnabled && !reduceMotion },
+                set: { wordPopEnabled = $0 }
+            )) {
                 Text("Pop Words In")
                 Text(reduceMotion
-                     ? "With Reduce Motion on, each word fades in instead"
+                     ? "Off because Reduce Motion is turned on in Accessibility settings"
                      : "Each word springs in as it appears, like video captions")
             }
+            .disabled(reduceMotion)
         } header: {
             Text("Reading")
         } footer: {

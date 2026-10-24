@@ -98,7 +98,6 @@ struct WordPopTests {
         #expect(WordPop.startScale < 1)
         #expect(WordPop.peakScale > 1)
         #expect(WordPop.peakScale < 1.1)
-        #expect(WordPop.fadeStartOpacity > 0 && WordPop.fadeStartOpacity < 1)
     }
 
     // MARK: - Keyframes
@@ -114,8 +113,8 @@ struct WordPopTests {
         return (cue, KeyframeTimeline(initialValue: frame) { WordPop.keyframes(for: cue) })
     }
 
-    /// A frame partway through a pop or a fade.
-    private static let midPop = WordPop.Frame(scale: 1.03, opacity: 0.7)
+    /// A frame partway through a pop.
+    private static let midPop = WordPop.Frame(scale: 1.03)
 
     /// The word shows small at once, even when the last word hadn't
     /// settled, grows fast, peaks a little past its size, and settles at it
@@ -136,7 +135,6 @@ struct WordPopTests {
                 let time = cue.duration * Double(step) / 100
                 let frame = timeline.value(time: time)
                 #expect(frame.scale >= WordPop.startScale - 1e-9 && frame.scale <= WordPop.peakScale + 1e-9, "\(speed) wpm, \(time)s")
-                #expect(frame.opacity == 1, "\(speed) wpm, \(time)s")
                 if time <= cue.riseDuration {
                     #expect(frame.scale >= previous - 1e-9, "\(speed) wpm, \(time)s")
                 } else {
@@ -147,18 +145,6 @@ struct WordPopTests {
         }
     }
 
-    /// Under Reduce Motion the word keeps its size and only fades in.
-    @Test func fadeKeepsTheWordsSize() {
-        let (cue, timeline) = Self.timeline(.fade, from: Self.midPop)
-        #expect(abs(timeline.value(time: 0).opacity - WordPop.fadeStartOpacity) < 1e-9)
-        #expect(abs(timeline.value(time: cue.duration).opacity - 1) < 1e-6)
-        for step in 0...20 {
-            let frame = timeline.value(time: cue.duration * Double(step) / 20)
-            #expect(frame.scale == 1)
-            #expect(frame.opacity >= WordPop.fadeStartOpacity - 1e-9 && frame.opacity <= 1 + 1e-9)
-        }
-    }
-
     /// A word changed while paused, or hidden, shows at rest straight away,
     /// even one caught mid-pop.
     @Test func stillWordsRestAtOnce() {
@@ -166,7 +152,6 @@ struct WordPopTests {
             let (_, timeline) = Self.timeline(.still, from: frame)
             #expect(timeline.duration == 0)
             #expect(timeline.value(time: 0).scale == 1)
-            #expect(timeline.value(time: 0).opacity == 1)
         }
     }
 
@@ -237,9 +222,10 @@ struct WordPopTests {
         #expect(back.style == .still)
     }
 
-    @Test func reduceMotionFadesInstead() {
-        #expect(Self.cue(reduceMotion: true).style == .fade)
-        #expect(WordPop.style(reduceMotion: true) == .fade)
+    /// Reduce Motion turns pops off: every word changes in place.
+    @Test func reduceMotionTurnsPopsOff() {
+        #expect(Self.cue(reduceMotion: true).style == .still)
+        #expect(WordPop.style(reduceMotion: true) == .still)
         #expect(WordPop.style(reduceMotion: false) == .pop)
     }
 
