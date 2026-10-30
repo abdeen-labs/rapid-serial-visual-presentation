@@ -38,6 +38,13 @@ import os
 /// takes, on the word or title it started on; only a failure of the audio
 /// session, a rendering, or playback stops it, sending
 /// ``PacerEvent/failed`` and then calling ``onFailure``.
+///
+/// A render can fail on what it was given alone, so a unit the voice
+/// couldn't render is read without it rather than stopping reading: its
+/// words show at the speed of the moment, one base interval each, over
+/// silence, and the voice reads on after it. A second render failing right
+/// after the first means the voice itself has stopped working, and stops
+/// reading.
 final class ReadAloudPacer: WordPacer {
     var onEvent: ((PacerEvent) -> Void)?
 
@@ -109,6 +116,9 @@ final class ReadAloudPacer: WordPacer {
     private var rendering: Rendering?
     private var renderTask: Task<Void, Never>?
     private var renderCount = 0
+    /// Whether the last render to finish failed, and its unit is read
+    /// without the voice.
+    private var lastRenderFailed = false
     private var isPlayerStarted = false
     /// Whether the audio session is active for this run, so the player can
     /// start. It activates off the main thread while the first unit renders.
@@ -214,6 +224,7 @@ final class ReadAloudPacer: WordPacer {
         renderTask?.cancel()
         renderTask = nil
         rendering = nil
+        lastRenderFailed = false
         player.stop()
         isPlayerStarted = false
         units = []
@@ -231,7 +242,9 @@ final class ReadAloudPacer: WordPacer {
             applySpeed(for: heard)
         }
         let renderingFor = renderedSpeed()
-        for unit in units where !unit.isEnqueued && unit.audio != nil {
+        // Words read without the voice are stretched like those with the
+        // player, rather than given to the voice again.
+        for unit in units where !unit.isEnqueued && unit.audio != nil && !unit.isUnvoiced {
             // Silence is made for the speed itself.
             let newSpeed = unit.content.script == nil ? Double(wordsPerMinute) : renderingFor
             if Self.differs(unit.renderedFor, from: newSpeed) {
@@ -408,6 +421,9 @@ final class ReadAloudPacer: WordPacer {
         /// Whether what its start means has been sent.
         var hasStarted = false
         var playedOut = false
+        /// Whether the voice couldn't render it, so it's silence instead
+        /// (``readWithoutVoice(_:)``).
+        var isUnvoiced = false
 
         init(id: Int, content: Content) {
             self.id = id
@@ -567,9 +583,20 @@ final class ReadAloudPacer: WordPacer {
         case .success(let rendered):
             speech = rendered
         case .failure(let error):
-            fail(error, as: .rendering)
+            // Failing twice running, the voice has stopped working.
+            guard !lastRenderFailed else {
+                fail(error, as: .rendering)
+                return
+            }
+            lastRenderFailed = true
+            Self.logger.error("Reading on without the voice, which couldn't render what comes next: \(error)")
+            if let unit = units.first(where: { $0.id == finished.unitID }) {
+                guard readWithoutVoice(unit) else { return }
+            }
+            refill()
             return
         }
+        lastRenderFailed = false
         if let unit = units.first(where: { $0.id == finished.unitID }) {
             unit.audio = speech
             // The speed the audio says it was rendered at, should the
@@ -623,6 +650,29 @@ final class ReadAloudPacer: WordPacer {
         // Stretched with the speed like the rest, so a sentence break keeps
         // to its number of words' time.
         unit.renderedFor = Double(wordsPerMinute)
+        return true
+    }
+
+    /// Gives a unit the voice couldn't render silence in its place: as long
+    /// as its words take at the speed of the moment, one base interval each,
+    /// each showing in turn, or a title's time without a voice.
+    /// - Returns: Whether reading goes on.
+    private func readWithoutVoice(_ unit: Unit) -> Bool {
+        guard case .words(let script) = unit.content else {
+            unit.isUnvoiced = true
+            return makeSilence(for: unit)
+        }
+        let interval = 60 / Double(max(1, wordsPerMinute))
+        let format = silenceFormat ?? AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)
+        guard let format,
+              let silence = Self.silence(lasting: Double(script.words.count) * interval, in: format) else {
+            fail(ReadAloudError.couldNotMakeSilence, as: .playback)
+            return false
+        }
+        unit.audio = silence
+        unit.schedule = SpeechSchedule(unvoiced: script, interval: interval)
+        unit.renderedFor = Double(wordsPerMinute)
+        unit.isUnvoiced = true
         return true
     }
 

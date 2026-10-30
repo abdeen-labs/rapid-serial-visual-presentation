@@ -1,3 +1,4 @@
+import CoreML
 import FluidAudio
 import Foundation
 import Observation
@@ -178,7 +179,25 @@ final class KokoroVoiceModel {
     }
 
     private static func makeManager(directory: URL, version: KokoroAneVersion) -> KokoroAneManager {
-        KokoroAneManager(variant: .english, directory: directory, version: version)
+        KokoroAneManager(variant: .english, directory: directory, computeUnits: computeUnits, version: version)
+    }
+
+    /// Where Core ML runs each of the model's stages: FluidAudio's choice
+    /// for this system, but with the second stage, which predicts each
+    /// sound's length, on the CPU alone.
+    ///
+    /// FluidAudio splits that stage between the Neural Engine and the CPU.
+    /// Split so, on macOS 27.2 with an M3 Pro, Core ML sometimes took the
+    /// stage's token count from the wrong buffer: a line in a book
+    /// (`“Now I will tell you something very important.`) failed with
+    /// `Tile: Shape deduction failed as reps[0]=-1255065905`, and on other
+    /// renders asked for so much memory that the system ran out. On the CPU
+    /// alone, that line and the whole book (6,495 chunks) rendered without
+    /// a failure, the stage taking 3.5 ms a render on average.
+    nonisolated static var computeUnits: KokoroAneComputeUnits {
+        var units = KokoroAneComputeUnits.default
+        units.postAlbert = .cpuOnly
+        return units
     }
 
     // MARK: - Installing

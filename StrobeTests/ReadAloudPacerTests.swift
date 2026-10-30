@@ -36,6 +36,8 @@ struct ReadAloudPacerTests {
         /// cancelled.
         var holdsRenders = false
         var failure: (any Error)?
+        /// Scripts whose renders fail, by their text.
+        var failingTexts: Set<String> = []
         /// The speed the audio says it was rendered at, as when a renderer
         /// can't reach the one asked for; nil for the speed asked for.
         var reportedSpeed: Double?
@@ -52,6 +54,7 @@ struct ReadAloudPacerTests {
                 }
             }
             if let failure { throw failure }
+            if failingTexts.contains(script.text) { throw TestError() }
             let speech = Self.speech(saying: script, speed: reportedSpeed ?? speed)
             texts[ObjectIdentifier(speech.buffer)] = script.text
             return speech
@@ -621,7 +624,8 @@ struct ReadAloudPacerTests {
 
     // MARK: - Failing
 
-    /// A failure stops reading, then says what failed, once.
+    /// A voice that fails to render twice running stops reading, then says
+    /// what failed, once.
     @Test func aRenderFailureFails() async {
         let harness = Harness()
         harness.renderer.failure = TestError()
@@ -630,6 +634,74 @@ struct ReadAloudPacerTests {
         #expect(!harness.pacer.isRunning)
         #expect(harness.failures == [.rendering])
         #expect(harness.failuresFollowStopping)
+    }
+
+    /// Words the voice couldn't render show over silence, one base interval
+    /// each, and the voice reads on after them.
+    @Test func wordsTheVoiceCantRenderAreReadWithoutIt() async throws {
+        let harness = Harness()
+        harness.renderer.failingTexts = ["Four five six."]
+        await harness.start(Self.threeSentences)
+        #expect(harness.pacer.isRunning)
+        #expect(harness.failures.isEmpty)
+        // Three words' time at 300 wpm, with nothing said.
+        #expect(harness.text(ofQueued: 1) == nil)
+        #expect(abs(harness.player.queue[1].speech.duration - 0.6) < 0.001)
+
+        harness.hear(0, at: 1.15)
+        harness.hear(1, at: 0)
+        #expect(harness.events.last == .word(3))
+        harness.hear(1, at: 0.25)
+        #expect(harness.events.last == .word(4))
+        let interval = try #require(harness.wordIntervals.last ?? nil)
+        #expect(abs(interval - 0.2) < 1e-6)
+        harness.hear(1, at: 0.45)
+        #expect(harness.events.last == .word(5))
+        // The voice reads the next sentence, and was asked once for this one.
+        #expect(harness.text(ofQueued: 2) == "Seven eight nine.")
+        harness.hear(2, at: 0.25)
+        #expect(harness.events == [.word(0), .word(2), .word(3), .word(4), .word(5), .word(6)])
+        #expect(harness.renderer.requests.map(\.text) == ["One two three.", "Four five six.", "Seven eight nine."])
+        #expect(harness.failures.isEmpty)
+    }
+
+    /// A failure after the voice rendered again is read without it too.
+    @Test func failuresApartAreEachReadWithoutTheVoice() async {
+        let harness = Harness()
+        let words = "One. Two. Three. Four. Five.".split(separator: " ").map(String.init)
+        harness.renderer.failingTexts = ["Two.", "Four."]
+        await harness.start(words)
+        for unit in 0..<5 {
+            harness.hear(unit, at: 0.25)
+            await harness.settle()
+        }
+        #expect(harness.events == (0..<5).map { .word($0) })
+        #expect(harness.failures.isEmpty)
+        #expect(harness.pacer.isRunning)
+    }
+
+    /// Two failures in a row stop reading.
+    @Test func failuresInARowFail() async {
+        let harness = Harness()
+        harness.renderer.failingTexts = ["Four five six.", "Seven eight nine."]
+        await harness.start(Self.threeSentences)
+        #expect(harness.events == [.word(0), .failed])
+        #expect(harness.failures == [.rendering])
+        #expect(harness.failuresFollowStopping)
+    }
+
+    /// Words read without the voice are stretched with a speed change
+    /// rather than given to the voice again.
+    @Test func wordsReadWithoutTheVoiceStayWithoutIt() async {
+        let harness = Harness()
+        harness.renderer.failingTexts = ["Seven eight nine."]
+        await harness.start(Self.threeSentences)
+        #expect(harness.player.queue.count == 2)
+        harness.pacer.speedDidChange(wordsPerMinute: 600)
+        await harness.settle()
+        #expect(harness.renderer.requests.count(where: { $0.text == "Seven eight nine." }) == 1)
+        #expect(harness.failures.isEmpty)
+        #expect(harness.pacer.isRunning)
     }
 
     @Test func aPlayerFailureFails() async {

@@ -125,6 +125,16 @@ nonisolated struct SpeechSchedule: Equatable, Sendable {
         self.speechEnd = speechEnd
     }
 
+    /// The schedule of `script`'s words read without a voice, over silence:
+    /// each in turn, `interval` seconds apart, as without reading aloud,
+    /// the last one's time running to the end.
+    init(unvoiced script: SpeechScript, interval: TimeInterval) {
+        let interval = interval.isFinite ? max(0, interval) : 0
+        startTimes = script.words.indices.map { Double($0) * interval }
+        speechStart = 0
+        speechEnd = Double(script.words.count) * interval
+    }
+
     /// The word being read `time` seconds into the chunk, as a position in
     /// the script's words: the last one whose start has come. `nil` before
     /// the first word starts.
