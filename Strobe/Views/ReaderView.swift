@@ -338,8 +338,16 @@ struct ReaderView: View {
             readerFocused = true
             AppRouter.shared.readerDidAppear(documentID: document.id)
         }
+        // What Now Playing shows while a voice reads, renamed or not.
+        .onChange(of: document.title, initial: true) {
+            readAloud.nowPlayingItem = ReadAloudNowPlaying.Item(
+                id: document.id,
+                title: document.title,
+                cover: DocumentCover(document: document)
+            )
+        }
         .marksDocumentOpen(document.id)
-        .keepsVoiceModelLoaded(readAloud.usesVoiceModel)
+        .keepsVoiceModelLoaded(holdsVoiceModel)
         // Re-assert keyboard focus whenever any overlay (passage view, chapter
         // picker, save-error or read-aloud alert) closes, so Space/arrow
         // shortcuts keep working on macOS. One derived flag covers all
@@ -350,15 +358,17 @@ struct ReaderView: View {
         }
         .onDisappear {
             persistState(pauseEngine: true, touchLastReadDate: true)
+            readAloud.readerDidClose()
             AppRouter.shared.readerDidDisappear(documentID: document.id)
         }
         .onChange(of: scenePhase) { _, newPhase in
-            readAloud.isInForeground = newPhase == .active
+            readAloud.scenePhase = newPhase
             if newPhase == .inactive || newPhase == .background {
                 // Pause as well as persist — words advancing while the app is
                 // covered (Notification Center, app switcher, a call) are
-                // words the user never saw.
-                persistState(pauseEngine: true, touchLastReadDate: false)
+                // words the user never saw. A voice reads on, heard if not
+                // seen, in the background too where it can.
+                persistState(pauseEngine: !readsOnUnseen(in: newPhase), touchLastReadDate: false)
             }
         }
         .onChange(of: showPassage) { _, isShowing in
@@ -384,6 +394,12 @@ struct ReaderView: View {
             if !isNowPlaying {
                 isHandsFree = false
                 readAloud.playbackDidPause()
+                // A voice paused in the background, as from the lock
+                // screen: the app can be suspended, and then ended, before
+                // the reader shows again.
+                if scenePhase == .background {
+                    persistState(pauseEngine: false, touchLastReadDate: true)
+                }
             }
             if wasPlaying && !isNowPlaying && engine.isAtEnd {
                 HapticManager.shared.completedReading()
@@ -446,7 +462,7 @@ struct ReaderView: View {
             // The cover hides the reader, which counts as closing it.
             PassageView(document: document, engine: engine)
                 .marksDocumentOpen(document.id)
-                .keepsVoiceModelLoaded(readAloud.usesVoiceModel)
+                .keepsVoiceModelLoaded(holdsVoiceModel)
         }
         #elseif os(macOS)
         .sheet(isPresented: $showPassage) {
@@ -479,6 +495,12 @@ struct ReaderView: View {
         // Cmd+Q doesn't reliably trigger onDisappear/scenePhase on macOS —
         // without this hook, quitting mid-read loses the session's position.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            persistState(pauseEngine: true, touchLastReadDate: true)
+        }
+        #elseif os(iOS)
+        // Swiping the app away while a voice reads in the background ends
+        // it without leaving the background first.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
             persistState(pauseEngine: true, touchLastReadDate: true)
         }
         #endif
@@ -985,21 +1007,29 @@ struct ReaderView: View {
     private var readAloudSetup: ReadAloudController.Setup {
         readAloud.setup(
             isEnabled: readAloudEnabled,
-            isInBackground: isReadAloudSetAside,
             isLoaded: isLoaded,
             voice: KokoroVoices.chosen(readAloudVoice).id
         )
     }
 
-    /// Whether reading aloud is set aside for the scene being in the
-    /// background, so the voice model can unload. iOS can end an app in the
-    /// background that holds on to hundreds of megabytes; the Mac keeps it.
-    private var isReadAloudSetAside: Bool {
+    /// Whether the reader keeps the voice model loaded: while it reads
+    /// aloud, except paused in the background on iOS, which can end an app
+    /// there that holds on to hundreds of megabytes. Playing again, as from
+    /// the lock screen, loads it again; the Mac keeps it.
+    private var holdsVoiceModel: Bool {
         #if os(iOS)
-        scenePhase == .background
+        readAloud.usesVoiceModel && (scenePhase != .background || engine.isPlaying)
         #else
-        false
+        readAloud.usesVoiceModel
         #endif
+    }
+
+    /// Whether reading goes on in `phase`, out of sight: while a voice
+    /// plays, and in the background only where it can read there
+    /// (``KokoroVoiceModel/rendersInBackground``).
+    private func readsOnUnseen(in phase: ScenePhase) -> Bool {
+        guard readAloud.isPlaying else { return false }
+        return phase != .background || KokoroVoiceModel.rendersInBackground
     }
 
     private func readAloudButtonTapped(_ tap: ReadAloudAvailability.Tap) {

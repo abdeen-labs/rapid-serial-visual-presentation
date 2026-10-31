@@ -6,7 +6,8 @@ import SwiftUI
 ///
 /// Each reader reading aloud holds it while it shows, and so does its
 /// passage view, which covers it on iOS
-/// (``SwiftUI/View/keepsVoiceModelLoaded(_:)``). A voice sample in Settings
+/// (``SwiftUI/View/keepsVoiceModelLoaded(_:)``); on iOS, a reader in the
+/// background holds it only while a voice plays. A voice sample in Settings
 /// holds it while it plays and for a while after, so trying one voice after
 /// another doesn't load it each time (``release(_:after:)``). Holding never
 /// loads the model; reading or a sample does. Once the last one lets go,
@@ -62,6 +63,10 @@ enum VoiceModelUse {
         guard holders.isEmpty, KokoroVoiceModel.isSupported else { return }
         pendingUnload?.cancel()
         pendingUnload = Task {
+            // A reader paused in the background lets go just before iOS
+            // would suspend the app, which would keep the model loaded.
+            let time = BackgroundTime("Unload the voice model")
+            defer { time.end() }
             try? await Task.sleep(for: unloadDelay)
             // A download, load, or voice under way finishes first, since the
             // model doesn't unload while one runs; the first load compiles

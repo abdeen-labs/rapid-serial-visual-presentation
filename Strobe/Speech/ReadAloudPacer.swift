@@ -17,8 +17,8 @@ import os
 /// Spoken units are rendered one at a time, up to ``spokenUnitsAhead``
 /// past the one being heard, and handed to the player once less than
 /// ``queuedAudioTarget`` of audio is left before it runs out. About 60 times
-/// a second, the pacer asks the player where the listener is and turns it
-/// into events: a word once its start in the unit's ``SpeechSchedule`` has
+/// a second (10 while the words don't show), the pacer asks the player
+/// where the listener is and turns it into events: a word once its start in the unit's ``SpeechSchedule`` has
 /// come, with its time until the next word as played, a title or its fade
 /// when its unit starts, a sentence break once the voice falls silent before
 /// one, and the end once the last unit has played. A change to the sentence
@@ -78,6 +78,23 @@ final class ReadAloudPacer: WordPacer {
     /// How often the pacer checks where the listener is.
     static let tickInterval: TimeInterval = 1.0 / 60
 
+    /// How often it checks while no one sees the words (``showsWords``):
+    /// often enough to keep the player fed, and far less often than
+    /// following the voice word by word, which the screen being off makes
+    /// pointless and which would cost battery.
+    static let unseenTickInterval: TimeInterval = 1.0 / 10
+
+    /// Whether the words show, as they don't with the screen off or the
+    /// app in the background. While they don't, the pacer checks where the
+    /// listener is only every ``unseenTickInterval``, so the reader moves on
+    /// in steps.
+    var showsWords = true {
+        didSet {
+            guard showsWords != oldValue, timer != nil else { return }
+            startTimer()
+        }
+    }
+
     /// How long a chapter title with nothing to say (only marks) shows:
     /// the shortest time the reader shows a title for without a voice.
     static let silentTitleDuration: TimeInterval = 1.6
@@ -127,6 +144,10 @@ final class ReadAloudPacer: WordPacer {
     /// has rendered some.
     private var silenceFormat: AVAudioFormat?
     private var timer: Timer?
+    /// Keeps the app running in the background until the player starts,
+    /// which then does: reading can start there from the lock screen, and
+    /// the first render can take seconds while the model loads again.
+    private var startingTime: BackgroundTime?
 
     /// - Parameters:
     ///   - voiceIdentifier: The voice `renderer` reads with, a Kokoro voice
@@ -175,6 +196,7 @@ final class ReadAloudPacer: WordPacer {
         let announcesTitle = context.announcesChapterAtStart && context.chapters[start] != nil
         nextStep = announcesTitle ? .title(start) : .words(start)
         if let session {
+            startingTime = BackgroundTime("Start reading aloud")
             isSessionReady = false
             let run = runID
             Task { [weak self] in
@@ -208,12 +230,20 @@ final class ReadAloudPacer: WordPacer {
             guard send(.word(start)) else { return }
         }
 
-        let timer = Timer(timeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
+        startTimer()
+        refill()
+    }
+
+    /// Starts checking where the listener is, as often as ``showsWords``
+    /// calls for, in place of any checking under way.
+    private func startTimer() {
+        timer?.invalidate()
+        let interval = showsWords ? Self.tickInterval : Self.unseenTickInterval
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        refill()
     }
 
     func stop() {
@@ -233,6 +263,8 @@ final class ReadAloudPacer: WordPacer {
         timing = nil
         lastWordSent = nil
         session?.deactivate()
+        startingTime?.end()
+        startingTime = nil
     }
 
     func speedDidChange(wordsPerMinute: Int) {
@@ -711,6 +743,8 @@ final class ReadAloudPacer: WordPacer {
         do {
             try player.play()
             isPlayerStarted = true
+            startingTime?.end()
+            startingTime = nil
         } catch {
             fail(error, as: .playback)
         }

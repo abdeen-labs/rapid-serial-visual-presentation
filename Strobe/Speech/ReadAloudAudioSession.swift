@@ -5,8 +5,10 @@ import Foundation
 import os
 
 /// The audio session while reading aloud: spoken audio that plays with the
-/// silent switch on, pauses other spoken audio such as podcasts, and mixes
-/// with music.
+/// silent switch on and in the background, and pauses other apps' audio,
+/// music too. Audio that mixed with others' couldn't have the system's Now
+/// Playing (``ReadAloudNowPlaying``), whose controls on the lock screen and
+/// headphones would then reach the music app instead.
 ///
 /// Reports what playback has to answer: an interruption (a call, another
 /// app), its end, headphones going away, and the media services resetting.
@@ -118,7 +120,7 @@ final class ReadAloudAudioSession {
                 Self.queue.async {
                     do {
                         let session = AVAudioSession.sharedInstance()
-                        try session.setCategory(.playback, mode: .spokenAudio, options: [.interruptSpokenAudioAndMixWithOthers])
+                        try session.setCategory(.playback, mode: .spokenAudio)
                         try session.setActive(true)
                         continuation.resume()
                     } catch {

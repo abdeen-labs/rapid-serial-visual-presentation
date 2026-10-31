@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 /// Reading aloud in an open reader. Once the words load, with the setting
 /// on, an English document, and the voice model on disk, it gets the chosen
@@ -17,8 +18,13 @@ import Observation
 /// A voice that stops working while it reads (the audio session, a
 /// rendering, or playback failing) stops reading aloud for this reader,
 /// which says why (``failure``, ``failureAlerts``) and offers Try Again
-/// (``retry()``). In the background on iOS, reading aloud is set aside,
-/// so the voice model can unload, and set up again on coming back.
+/// (``retry()``).
+///
+/// A voice reads on in the background, as with the screen off, where it
+/// can (``KokoroVoiceModel/rendersInBackground``). While it reads, the
+/// reader has the system's Now Playing (``ReadAloudNowPlaying``), whose
+/// play and pause reach it there too. Paused in the background on iOS, the
+/// reader lets the voice model unload, and playing again loads it.
 @Observable
 final class ReadAloudController {
     /// Whether a voice reads the engine's words.
@@ -53,10 +59,37 @@ final class ReadAloudController {
     /// one is on its way (``VoiceModelUse``).
     private(set) var usesVoiceModel = false
 
-    /// Whether the reader's scene is in the foreground. An interruption
-    /// that ends while it isn't leaves reading paused, as leaving the
-    /// foreground does.
-    @ObservationIgnored var isInForeground = true
+    /// The reader's scene's phase. In the background, the pacer follows
+    /// the voice less closely, since no one sees the words. Where the voice
+    /// can't read there, playing waits for the foreground, and the reader
+    /// gives up Now Playing; coming back loads the model again if it
+    /// unloaded.
+    @ObservationIgnored var scenePhase: ScenePhase = .active {
+        didSet {
+            guard scenePhase != oldValue else { return }
+            readerPacer?.showsWords = scenePhase != .background
+            if scenePhase == .background, !KokoroVoiceModel.rendersInBackground {
+                ReadAloudNowPlaying.shared.release(self)
+            }
+            if oldValue == .background, current != nil {
+                KokoroVoiceModel.shared.reload()
+            }
+        }
+    }
+
+    /// What the system's Now Playing shows while a voice reads here: the
+    /// document's title and cover.
+    @ObservationIgnored var nowPlayingItem: ReadAloudNowPlaying.Item? {
+        didSet {
+            guard let nowPlayingItem, let engine, isReadingAloud, engine.isPlaying else { return }
+            ReadAloudNowPlaying.shared.show(nowPlayingItem, isPlaying: true, for: self)
+        }
+    }
+
+    /// Whether a voice reads the words now, rather than being paused.
+    var isPlaying: Bool {
+        isReadingAloud && engine?.isPlaying == true
+    }
 
     @ObservationIgnored private weak var engine: RSVPEngine?
     /// The voice reading.
@@ -74,6 +107,7 @@ final class ReadAloudController {
     /// Reading aloud was playing when an interruption began.
     @ObservationIgnored private var resumesAfterInterruption = false
     @ObservationIgnored private var followsModel = false
+    @ObservationIgnored private var followsPlayback = false
 
     /// A Kokoro voice, by name, and what renders it.
     private struct Voice {
@@ -84,11 +118,6 @@ final class ReadAloudController {
     /// What reading aloud depends on. A change sets it up again.
     struct Setup: Equatable {
         var isEnabled: Bool
-        /// Whether the reader's scene is in the background, where reading
-        /// aloud is set aside so the voice model can unload: iOS can end an
-        /// app in the background that holds on to it. Coming back sets it
-        /// up again.
-        var isInBackground: Bool
         /// Whether the engine has the document's words.
         var isLoaded: Bool
         /// The chosen voice's name (``KokoroVoices/chosen(_:)``).
@@ -98,12 +127,10 @@ final class ReadAloudController {
     }
 
     /// What reading aloud depends on, from the reader's part of it: the
-    /// setting, whether its scene is in the background, whether the words
-    /// have loaded, and the chosen voice.
-    func setup(isEnabled: Bool, isInBackground: Bool, isLoaded: Bool, voice: String) -> Setup {
+    /// setting, whether the words have loaded, and the chosen voice.
+    func setup(isEnabled: Bool, isLoaded: Bool, voice: String) -> Setup {
         Setup(
             isEnabled: isEnabled,
-            isInBackground: isInBackground,
             isLoaded: isLoaded,
             voice: voice,
             isModelOnDisk: isModelOnDisk,
@@ -117,6 +144,7 @@ final class ReadAloudController {
     func update(_ setup: Setup, engine: RSVPEngine) async {
         self.engine = engine
         followModel()
+        followPlayback()
         guard setup.isLoaded, !engine.words.isEmpty else {
             turnOff()
             return
@@ -124,7 +152,7 @@ final class ReadAloudController {
         let language = await detectLanguage(of: engine.words)
         guard !Task.isCancelled else { return }
         canReadDocument = KokoroVoices.canRead(documentLanguage: language)
-        guard setup.isEnabled, !setup.isInBackground, canReadDocument, isModelOnDisk else {
+        guard setup.isEnabled, canReadDocument, isModelOnDisk else {
             turnOff()
             return
         }
@@ -183,6 +211,27 @@ final class ReadAloudController {
         }
     }
 
+    /// The reader closed, or its passage view covers it: it gives up Now
+    /// Playing until a voice plays again.
+    func readerDidClose() {
+        ReadAloudNowPlaying.shared.release(self)
+    }
+
+    /// Plays as Now Playing asks, as from the lock screen or headphones.
+    /// - Returns: Whether a voice reads now.
+    func playFromSystem() -> Bool {
+        guard isReadingAloud, let engine else { return false }
+        guard scenePhase != .background || KokoroVoiceModel.rendersInBackground else { return false }
+        if !engine.isPlaying { engine.play() }
+        return engine.isPlaying
+    }
+
+    /// Pauses as Now Playing asks.
+    func pauseFromSystem() {
+        guard let engine, engine.isPlaying else { return }
+        engine.pause()
+    }
+
     /// Playback paused: a chosen voice that wouldn't load while another
     /// read says so now, and one that got ready takes over.
     func playbackDidPause() {
@@ -212,6 +261,7 @@ final class ReadAloudController {
             guard let self, let pacer else { return }
             self.voiceFailed(failure, in: pacer)
         }
+        pacer.showsWords = scenePhase != .background
         engine.pacer = pacer
         engine.speedCap = Int(ReaderSettings.readAloudWPMRange.upperBound)
         current = voice
@@ -259,6 +309,38 @@ final class ReadAloudController {
         usesVoiceModel = false
         failure = nil
         resumesAfterInterruption = false
+        ReadAloudNowPlaying.shared.release(self)
+    }
+
+    /// The engine's pacer, while it's one of this reader's voices.
+    private var readerPacer: ReadAloudPacer? {
+        guard isReadingAloud else { return nil }
+        return engine?.pacer as? ReadAloudPacer
+    }
+
+    /// Keeps Now Playing to whether a voice plays, from the first update
+    /// on, whatever starts or stops it: the reader, the system's controls,
+    /// an interruption, or the document's end.
+    private func followPlayback() {
+        guard !followsPlayback else { return }
+        followsPlayback = true
+        observePlayback()
+    }
+
+    private func observePlayback() {
+        guard let engine else { return }
+        let isPlaying = withObservationTracking {
+            engine.isPlaying
+        } onChange: { [weak self] in
+            // Called before the change; read it once it's made.
+            Task { @MainActor [weak self] in self?.observePlayback() }
+        }
+        guard isReadingAloud else { return }
+        if isPlaying, let nowPlayingItem {
+            ReadAloudNowPlaying.shared.show(nowPlayingItem, isPlaying: true, for: self)
+        } else {
+            ReadAloudNowPlaying.shared.update(isPlaying: isPlaying, for: self)
+        }
     }
 
     /// Keeps ``isModelOnDisk`` to the model's state from the first update
@@ -319,13 +401,13 @@ final class ReadAloudController {
         if engine.isPlaying { engine.pause() }
     }
 
-    /// Reads on if the system says to, reading aloud was playing when the
-    /// interruption began, and the reader is still in the foreground.
+    /// Reads on if the system says to and reading aloud was playing when
+    /// the interruption began, in the background too where the voice can
+    /// read there, as after a call taken with the screen off.
     private func interruptionEnded(shouldResume: Bool) {
         defer { resumesAfterInterruption = false }
-        guard shouldResume, resumesAfterInterruption, isInForeground, isReadingAloud,
-              let engine, !engine.isPlaying else { return }
-        engine.play()
+        guard shouldResume, resumesAfterInterruption else { return }
+        _ = playFromSystem()
     }
 
     /// Headphones went away: pause rather than go on through the speaker.

@@ -200,6 +200,32 @@ final class KokoroVoiceModel {
         return units
     }
 
+    /// Whether the voice can read while the app is in the background, as
+    /// with the screen off: always on the Mac, and on iOS where no stage
+    /// runs on the GPU (``computeUnits``), since iOS refuses GPU work from
+    /// an app in the background and Core ML then fails the prediction.
+    /// FluidAudio routes its last two stages to the GPU before iOS 27, and
+    /// to the CPU from iOS 27 on.
+    ///
+    /// The Neural Engine is allowed there: before iOS 27 for any app, and
+    /// from iOS 27 on for one with the Background Inference entitlement
+    /// (`com.apple.developer.background-tasks.continued-processing.inference`),
+    /// which Strobe has.
+    nonisolated static var rendersInBackground: Bool {
+        #if os(iOS)
+        let units = computeUnits
+        return runsInBackground([units.albert, units.postAlbert, units.alignment, units.prosody, units.noise, units.vocoder, units.tail])
+        #else
+        true
+        #endif
+    }
+
+    /// Whether stages routed to `units` all run on the CPU or the Neural
+    /// Engine, which iOS lets an app in the background use.
+    nonisolated static func runsInBackground(_ units: [MLComputeUnits]) -> Bool {
+        units.allSatisfy { $0 == .cpuOnly || $0 == .cpuAndNeuralEngine }
+    }
+
     // MARK: - Installing
 
     /// Downloads the model if it isn't on disk, or is an older build's,
@@ -534,6 +560,14 @@ final class KokoroVoiceModel {
         guard state == .ready, !isBusy, removal == nil else { return }
         manager = Self.makeManager(directory: directory, version: version)
         state = .installed
+    }
+
+    /// Loads the model again if it unloaded, as for a reader that let it
+    /// go in the background and has come back, so its next play doesn't
+    /// wait for the load. Renders load it on their own otherwise.
+    func reload() {
+        guard state == .installed, !isBusy, removal == nil else { return }
+        Task { _ = try? await load() }
     }
 
     /// Whether a download, a load, or a voice getting ready is under way,
