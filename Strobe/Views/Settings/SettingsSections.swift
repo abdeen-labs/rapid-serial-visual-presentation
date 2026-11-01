@@ -230,7 +230,7 @@ struct ReadingAppearanceSection: View {
         } header: {
             Text("Reading")
         } footer: {
-            Text("Speed applies to documents you add from now on, and each document remembers its own. It counts the time pauses and slowdowns add, so a document reads at its speed overall.")
+            Text("Speed applies to documents you add from now on. Each document remembers its own speed.")
         }
     }
 }
