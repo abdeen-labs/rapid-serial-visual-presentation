@@ -172,7 +172,8 @@ struct CompoundWordTimingTests {
             sentencePauseEnabled: pauses,
             smartTimingMinimumWordLength: minimumWordLength,
             complexityTimingEnabled: complexityScore != nil,
-            complexityIntensity: 1.0,
+            complexitySpeedUpIntensity: 1.0,
+            complexitySlowDownIntensity: 1.0,
             complexityScores: complexityScore.map { [$0] }
         ).nextInterval()
     }

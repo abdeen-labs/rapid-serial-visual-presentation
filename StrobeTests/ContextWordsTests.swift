@@ -31,6 +31,44 @@ struct ContextWordsTests {
         #expect(ContextWords.neighbors(of: 2, in: ["a", "b"]) == none)
     }
 
+    @Test func eachSideCanShowAlone() {
+        let words = ["reading", "the", "information"]
+        #expect(ContextWords.neighbors(of: 1, in: words, sides: .both) == .init(previous: "reading", next: "information"))
+        #expect(ContextWords.neighbors(of: 1, in: words, sides: .previous) == .init(previous: "reading", next: nil))
+        #expect(ContextWords.neighbors(of: 1, in: words, sides: .next) == .init(previous: nil, next: "information"))
+        // A side that's off stays off at the document's edge too.
+        #expect(ContextWords.neighbors(of: 0, in: words, sides: .previous) == .init(previous: nil, next: nil))
+        // A stored choice the app doesn't know shows both.
+        #expect(ContextWords.Sides.resolve("sideways") == .both)
+    }
+
+    // MARK: - Opacity
+
+    /// The default, while playing, is each tone's dim text, as before the
+    /// setting; paused, they're readable in the tone's faded text.
+    @Test func defaultOpacityIsDimWhilePlayingAndFadedWhilePaused() {
+        let level = ReaderSettings.Defaults.contextWordsOpacity
+        for tone in ReaderTextTone.allCases {
+            #expect(ContextWords.opacity(isPlaying: true, level: level, tone: tone) == tone.dimTextOpacity, "\(tone.rawValue)")
+            #expect(ContextWords.opacity(isPlaying: false, level: level, tone: tone) == tone.fadedTextOpacity, "\(tone.rawValue)")
+        }
+    }
+
+    /// Raised past faded text, they show as brightly while paused as while
+    /// playing: pausing never makes them harder to read.
+    @Test func pausedOpacityIsNeverBelowPlaying() {
+        for tone in ReaderTextTone.allCases {
+            for level in stride(from: 0.0, through: 1.0, by: 0.05) {
+                let playing = ContextWords.opacity(isPlaying: true, level: level, tone: tone)
+                let paused = ContextWords.opacity(isPlaying: false, level: level, tone: tone)
+                #expect(playing == tone.opacity(level: level), "\(tone.rawValue), \(level)")
+                #expect(paused >= tone.fadedTextOpacity, "\(tone.rawValue), \(level)")
+                #expect(paused >= playing, "\(tone.rawValue), \(level)")
+            }
+            #expect(ContextWords.opacity(isPlaying: false, level: 1, tone: tone) == 1, "\(tone.rawValue)")
+        }
+    }
+
     // MARK: - Rendering
 
     private static let scale: CGFloat = 2
@@ -50,7 +88,7 @@ struct ContextWordsTests {
 
         var body: some View {
             WordView(word: word, fontSize: fontSize, context: context,
-                     contextIsRightToLeft: isRightToLeft, contextIsDimmed: isDimmed)
+                     contextIsRightToLeft: isRightToLeft, contextIsPlaying: isDimmed)
                 .frame(width: ContextWordsTests.width)
                 .background(Color.black)
                 .defaultAppStorage(defaults)

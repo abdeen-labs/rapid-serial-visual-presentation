@@ -185,7 +185,8 @@ struct ReadAloudPacerTests {
                 smartTimingMinimumWordLength: 1,
                 sentencePauseMultiplier: 1.5,
                 complexityTimingEnabled: false,
-                complexityIntensity: 0.5,
+                complexitySpeedUpIntensity: 0.5,
+                complexitySlowDownIntensity: 0.5,
                 punctuationPauses: PunctuationPauses(),
                 sentenceBreakEnabled: sentenceBreaks,
                 sentenceBreakLength: length

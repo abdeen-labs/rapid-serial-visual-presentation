@@ -376,7 +376,8 @@ struct SentenceBreakTests {
             sentencePauseMultiplier: 3.0,
             sentenceBreakEnabled: true,
             complexityTimingEnabled: true,
-            complexityIntensity: 1.0,
+            complexitySpeedUpIntensity: 1.0,
+            complexitySlowDownIntensity: 1.0,
             complexityScores: [1.0, 0.5]
         )
         #expect(engine.nextInterval() > 0.5)

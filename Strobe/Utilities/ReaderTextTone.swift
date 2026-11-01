@@ -83,6 +83,31 @@ nonisolated enum ReaderTextTone: String, CaseIterable, Identifiable {
     /// A low-contrast `textColor` for text that must never compete with the word.
     var fadedTextColor: Color { textColor.opacity(fadedTextOpacity) }
 
+    /// The opacity setting level, from 0 to 1, at which quiet text is the
+    /// tone's faded text.
+    static let fadedLevel = 0.5
+
+    /// Quiet text's opacity, as a fraction of `textColor`, at an opacity
+    /// setting of `level`, from 0 to 1: the open quotes and parentheses
+    /// above the word, and the previous and next words while words play.
+    ///
+    /// At ``fadedLevel`` it is the tone's faded text. Below that it fades
+    /// linearly toward the tone's dim text, faint but still visible, and
+    /// above it toward the full text color, the word's own. Each tone tunes
+    /// its faded and dim opacities to the same contrast, so a level looks
+    /// about as quiet in every tone.
+    func opacity(level: Double) -> Double {
+        let middle = Self.fadedLevel
+        let level = min(max(level, 0), 1)
+        // Weighted rather than offset, so the ends of each half are exact.
+        if level <= middle {
+            let t = level / middle
+            return dimTextOpacity * (1 - t) + fadedTextOpacity * t
+        }
+        let t = (level - middle) / (1 - middle)
+        return fadedTextOpacity * (1 - t) + t
+    }
+
     private static func color(_ rgb: UInt32) -> Color {
         Color(
             .sRGB,

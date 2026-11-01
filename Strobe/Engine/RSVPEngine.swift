@@ -93,8 +93,21 @@ final class RSVPEngine {
     /// speed alone doesn't pass them on again.
     @ObservationIgnored private var pacedTiming: ReaderSettings.TimingSnapshot?
 
-    /// The target reading speed. Changing this during playback reschedules the timer.
+    /// The target reading speed, with every pause and slowdown counted: the
+    /// timer runs its base speed ``paceFactor`` times faster, so a document
+    /// reads at this speed overall. Changing this during playback
+    /// reschedules the timer.
     var wordsPerMinute: Int {
+        didSet { onPlaybackSettingChanged() }
+    }
+
+    /// The document's pace factor under the timing settings (see
+    /// ``ReadingPace``): the base intervals its words take on average,
+    /// sentence breaks included. Plain words show for `1 / paceFactor` of a
+    /// minute's share at ``wordsPerMinute`` and the timing settings add the
+    /// rest, so the whole document reads at that speed. 1 until the factor
+    /// is known. A ``pacer`` reads at the speed itself and ignores it.
+    var paceFactor: Double = 1 {
         didSet { onPlaybackSettingChanged() }
     }
 
@@ -137,8 +150,8 @@ final class RSVPEngine {
     }
 
     /// Minimum letter count (punctuation excluded) a word needs before the
-    /// per-letter slowdown applies; shorter words display at the base rate so
-    /// the overall pace stays close to the configured WPM. 1 slows every word.
+    /// per-letter slowdown applies; shorter words display at the base rate.
+    /// 1 slows every word.
     var smartTimingMinimumWordLength: Int {
         didSet { onPlaybackSettingChanged() }
     }
@@ -173,8 +186,15 @@ final class RSVPEngine {
         didSet { onPlaybackSettingChanged() }
     }
 
-    /// How strongly complexity affects timing (0.0 = no effect, 1.0 = full effect).
-    var complexityIntensity: Double {
+    /// How much complexity speeds up simple words (0.0 = no effect, 1.0 =
+    /// full effect).
+    var complexitySpeedUpIntensity: Double {
+        didSet { onPlaybackSettingChanged() }
+    }
+
+    /// How much complexity slows down complex words (0.0 = no effect, 1.0 =
+    /// full effect).
+    var complexitySlowDownIntensity: Double {
         didSet { onPlaybackSettingChanged() }
     }
 
@@ -208,8 +228,11 @@ final class RSVPEngine {
     /// a deadline without waiting for it.
     private(set) var scheduledDeadline: DispatchTime?
 
+    /// A plain word's time: the speed's share of a minute, shortened by the
+    /// pace factor so the time the timing settings add evens out.
     private var baseInterval: TimeInterval {
-        60.0 / Double(max(1, effectiveWordsPerMinute))
+        let factor = paceFactor.isFinite && paceFactor > 0 ? paceFactor : 1
+        return 60.0 / (Double(max(1, effectiveWordsPerMinute)) * factor)
     }
 
     init(
@@ -225,7 +248,8 @@ final class RSVPEngine {
         sentenceBreakEnabled: Bool = false,
         sentenceBreakLength: Double = 1.0,
         complexityTimingEnabled: Bool = false,
-        complexityIntensity: Double = 0.5,
+        complexitySpeedUpIntensity: Double = 0.5,
+        complexitySlowDownIntensity: Double = 0.5,
         complexityScores: [Float]? = nil,
         chapters: [Chapter] = []
     ) {
@@ -241,7 +265,8 @@ final class RSVPEngine {
         self.sentenceBreakEnabled = sentenceBreakEnabled
         self.sentenceBreakLength = sentenceBreakLength
         self.complexityTimingEnabled = complexityTimingEnabled
-        self.complexityIntensity = complexityIntensity
+        self.complexitySpeedUpIntensity = complexitySpeedUpIntensity
+        self.complexitySlowDownIntensity = complexitySlowDownIntensity
         self.complexityScores = complexityScores
         setChapters(chapters)
     }
@@ -590,7 +615,8 @@ final class RSVPEngine {
             smartTimingMinimumWordLength: smartTimingMinimumWordLength,
             sentencePauseMultiplier: sentencePauseMultiplier,
             complexityTimingEnabled: complexityTimingEnabled,
-            complexityIntensity: complexityIntensity,
+            complexitySpeedUpIntensity: complexitySpeedUpIntensity,
+            complexitySlowDownIntensity: complexitySlowDownIntensity,
             punctuationPauses: punctuationPauses,
             sentenceBreakEnabled: sentenceBreakEnabled,
             sentenceBreakLength: sentenceBreakLength
@@ -598,10 +624,10 @@ final class RSVPEngine {
     }
 
     /// The display time for the word at `index` under `timing`, at
-    /// `baseInterval` per plain word. Playback and ``ReadingPace``'s
-    /// estimates both time words here, so the two can't drift apart. Every
-    /// term scales with `baseInterval`, so a word takes the same number of
-    /// base intervals at any speed.
+    /// `baseInterval` per plain word. Playback and ``ReadingPace``'s factor
+    /// both time words here, so the two can't drift apart. Every term scales
+    /// with `baseInterval`, so a word takes the same number of base intervals
+    /// at any speed.
     nonisolated static func interval(
         forWordAt index: Int,
         in words: [String],
@@ -644,20 +670,27 @@ final class RSVPEngine {
         if timing.complexityTimingEnabled, let scores = complexityScores,
            scores.indices.contains(index) {
             let score = Double(scores[index])
-            interval *= complexityMultiplier(score: score, intensity: timing.complexityIntensity)
+            interval *= complexityMultiplier(
+                score: score,
+                speedUp: timing.complexitySpeedUpIntensity,
+                slowDown: timing.complexitySlowDownIntensity
+            )
         }
 
         return interval
     }
 
-    /// Maps a complexity score (0.0–1.0) and intensity (0.0–1.0) to a timing multiplier.
+    /// Maps a complexity score (0.0–1.0) to a timing multiplier: words below
+    /// average take `speedUp`'s intensity, and words above it `slowDown`'s
+    /// (each 0.0–1.0).
     ///
-    /// At score 0.0 (trivial word) and full intensity: 0.7× (30% faster).
+    /// At score 0.0 (trivial word) and full speed-up: 0.4× (60% less time).
     /// At score 0.5 (average word): 1.0× (no change).
-    /// At score 1.0 (complex word) and full intensity: 1.6× (60% slower).
-    /// At zero intensity, the multiplier is always 1.0.
-    nonisolated static func complexityMultiplier(score: Double, intensity: Double) -> Double {
-        1.0 + (score - 0.5) * 1.2 * intensity
+    /// At score 1.0 (complex word) and full slow-down: 1.6× (60% more time).
+    /// At zero intensity, that side's multiplier is always 1.0.
+    nonisolated static func complexityMultiplier(score: Double, speedUp: Double, slowDown: Double) -> Double {
+        let intensity = score < 0.5 ? speedUp : slowDown
+        return 1.0 + (score - 0.5) * 1.2 * intensity
     }
 
     /// Returns a timing multiplier based on word length.

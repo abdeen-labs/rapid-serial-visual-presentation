@@ -149,8 +149,7 @@ struct ContinueReadingCard: View {
 
     var body: some View {
         let status = document.readingStatus
-        let pace = ReadingPace.shared
-        let minutesLeft = pace.remainingMinutes(for: document)
+        let minutesLeft = document.remainingMinutes
         let chapterTitle = ChapterTimeline(document.chapters).chapter(containing: document.currentWordIndex)?.title
         let progressLine = "\(status.label) · \(ReadingTime.label(minutes: minutesLeft)) left"
 
@@ -173,10 +172,10 @@ struct ContinueReadingCard: View {
                 .compactMap { $0 }
                 .joined(separator: ", ")
         )
-        // The time left follows the timing settings once the document's pace
-        // is worked out, and again after they change.
-        .task(id: pace.key(for: document)) {
-            pace.prepare(document)
+        // Works out the document's pace before the reader opens, so it
+        // starts at the document's speed with the timing settings counted.
+        .task(id: ReadingPace.shared.key(for: document)) {
+            ReadingPace.shared.prepare(document)
         }
     }
 

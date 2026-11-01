@@ -20,14 +20,17 @@ struct WordView: View, Equatable {
     let word: String
     let fontSize: CGFloat
     /// The words before and after this one, shown faded beside it in reading
-    /// order. Nil shows the word alone.
+    /// order. Nil shows the word alone, and so does a nil neighbour.
     var context: ContextWords.Neighbors? = nil
     /// Whether the document reads right to left, which puts the previous word
     /// on the right.
     var contextIsRightToLeft = false
-    /// Whether the neighbours fade nearly into the background, as during
-    /// playback, rather than staying readable.
-    var contextIsDimmed = false
+    /// Whether words are playing, which shows the neighbours at
+    /// `contextOpacityLevel` rather than readable (see
+    /// ``ContextWords/opacity(isPlaying:level:tone:)``).
+    var contextIsPlaying = false
+    /// The context words' opacity setting while words play.
+    var contextOpacityLevel = ReaderSettings.Defaults.contextWordsOpacity
     /// How the word pops in when it replaces the last one (see
     /// ``WordPop``). Nil never pops.
     var pop: WordPop.Cue? = nil
@@ -38,7 +41,8 @@ struct WordView: View, Equatable {
     static func == (lhs: WordView, rhs: WordView) -> Bool {
         lhs.word == rhs.word && lhs.fontSize == rhs.fontSize
             && lhs.context == rhs.context && lhs.contextIsRightToLeft == rhs.contextIsRightToLeft
-            && lhs.contextIsDimmed == rhs.contextIsDimmed
+            && lhs.contextIsPlaying == rhs.contextIsPlaying
+            && lhs.contextOpacityLevel == rhs.contextOpacityLevel
             && lhs.pop == rhs.pop
             && lhs.readerFontSelection == rhs.readerFontSelection
             && lhs.readerTextToneSelection == rhs.readerTextToneSelection
@@ -244,14 +248,14 @@ struct WordView: View, Equatable {
     }
 
     /// A neighbouring word at the word's size, in the reader's regular face
-    /// and the tone's faded color, or its dim one while `contextIsDimmed`;
-    /// empty when there is none. Never proposed a width, so a long neighbour
+    /// and the tone's text color at the context words' opacity; empty when
+    /// there is none. Never proposed a width, so a long neighbour
     /// runs past the screen edge rather than shrinking.
     private func contextWord(_ text: String?, fontSize: CGFloat) -> some View {
         Text(text ?? "")
             .font(readerFont.regularFont(size: fontSize, relativeTo: nil))
             .foregroundStyle(textTone.textColor)
-            .opacity(contextIsDimmed ? textTone.dimTextOpacity : textTone.fadedTextOpacity)
+            .opacity(ContextWords.opacity(isPlaying: contextIsPlaying, level: contextOpacityLevel, tone: textTone))
             .fixedSize()
     }
 

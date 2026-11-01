@@ -381,7 +381,7 @@ struct EnclosingMarksTests {
     /// setting.
     @Test func defaultOpacityIsEachTonesFadedText() {
         for tone in ReaderTextTone.allCases {
-            let opacity = EnclosingMarksLayout.opacity(level: ReaderSettings.Defaults.enclosingMarksOpacity, tone: tone)
+            let opacity = tone.opacity(level: ReaderSettings.Defaults.enclosingMarksOpacity)
             #expect(opacity == tone.fadedTextOpacity, "\(tone.rawValue)")
         }
     }
@@ -390,13 +390,13 @@ struct EnclosingMarksTests {
     /// color, brightening at every step.
     @Test func opacityRunsFromDimTextToTheFullTextColor() {
         for tone in ReaderTextTone.allCases {
-            #expect(EnclosingMarksLayout.opacity(level: 0, tone: tone) == tone.dimTextOpacity, "\(tone.rawValue)")
-            #expect(EnclosingMarksLayout.opacity(level: 1, tone: tone) == 1, "\(tone.rawValue)")
-            #expect(EnclosingMarksLayout.opacity(level: -1, tone: tone) == tone.dimTextOpacity, "\(tone.rawValue)")
-            #expect(EnclosingMarksLayout.opacity(level: 2, tone: tone) == 1, "\(tone.rawValue)")
+            #expect(tone.opacity(level: 0) == tone.dimTextOpacity, "\(tone.rawValue)")
+            #expect(tone.opacity(level: 1) == 1, "\(tone.rawValue)")
+            #expect(tone.opacity(level: -1) == tone.dimTextOpacity, "\(tone.rawValue)")
+            #expect(tone.opacity(level: 2) == 1, "\(tone.rawValue)")
 
             let opacities = stride(from: 0.0, through: 1.0, by: 0.05).map {
-                EnclosingMarksLayout.opacity(level: $0, tone: tone)
+                tone.opacity(level: $0)
             }
             #expect(zip(opacities, opacities.dropFirst()).allSatisfy { $0 < $1 }, "\(tone.rawValue)")
         }

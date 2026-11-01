@@ -57,6 +57,11 @@ nonisolated enum WhatsNew {
                 title: "Pop Words In",
                 detail: "Each word springs in as it appears, like video captions. Turn it on in Settings, under Reading."
             ),
+            Item(
+                symbol: "gauge.with.dots.needle.67percent",
+                title: "Speed Counts Every Pause",
+                detail: "The speed you set is now how fast you read overall. Pauses and slowdowns take their time from the other words instead of adding to it."
+            ),
         ]),
     ]
 

@@ -94,6 +94,7 @@ struct ReaderPreview: View {
     @AppStorage(ReaderSettings.Keys.defaultWPM) private var defaultWPM: Int = ReaderSettings.Defaults.defaultWPM
     @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
+    @AppStorage(ContextWords.Sides.storageKey) private var contextWordsSides = ContextWords.Sides.defaultValue.rawValue
     @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Counts the times Pop Words In turned on, so each one pops the word.
@@ -103,7 +104,9 @@ struct ReaderPreview: View {
         WordView(
             word: "Strobe",
             fontSize: CGFloat(fontSize),
-            context: contextWordsEnabled ? ContextWords.Neighbors(previous: "read", next: "faster") : nil,
+            context: contextWordsEnabled
+                ? ContextWordsPreview.neighbors.showing(ContextWords.Sides.resolve(contextWordsSides))
+                : nil,
             pop: WordPop.Cue(
                 trigger: popCount,
                 style: wordPopEnabled ? WordPop.style(reduceMotion: reduceMotion) : .still,
@@ -119,6 +122,37 @@ struct ReaderPreview: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Preview")
         .accessibilityValue("Strobe, \(fontSize) points")
+    }
+}
+
+/// The word "Strobe" with the previous and next words beside it, as they
+/// show while words play, so the context words' settings show as they're
+/// made.
+struct ContextWordsPreview: View {
+    @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
+    @AppStorage(ContextWords.Sides.storageKey) private var contextWordsSides = ContextWords.Sides.defaultValue.rawValue
+    @AppStorage(ReaderSettings.Keys.contextWordsOpacity) private var contextWordsOpacity: Double = ReaderSettings.Defaults.contextWordsOpacity
+
+    /// The words either side of "Strobe" in every preview.
+    static let neighbors = ContextWords.Neighbors(previous: "read", next: "faster")
+
+    var body: some View {
+        let context = Self.neighbors.showing(ContextWords.Sides.resolve(contextWordsSides))
+        WordView(
+            word: "Strobe",
+            fontSize: CGFloat(fontSize),
+            context: context,
+            contextIsPlaying: true,
+            contextOpacityLevel: contextWordsOpacity
+        )
+        .frame(maxWidth: .infinity)
+        .background { ReaderBackdrop() }
+        .clipShape(.rect(cornerRadius: 10, style: .continuous))
+        .padding(.vertical, 4)
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Preview")
+        .accessibilityValue([context.previous, "Strobe", context.next].compactMap(\.self).joined(separator: " "))
     }
 }
 
@@ -196,7 +230,7 @@ struct ReadingAppearanceSection: View {
         } header: {
             Text("Reading")
         } footer: {
-            Text("Speed applies to documents you add from now on. Each document remembers its own speed.")
+            Text("Speed applies to documents you add from now on, and each document remembers its own. It counts the time pauses and slowdowns add, so a document reads at its speed overall.")
         }
     }
 }
@@ -363,6 +397,8 @@ struct WhileReadingSections: View {
     @AppStorage(ReaderSettings.Keys.readingHeaderTitleEnabled) private var readingHeaderTitleEnabled: Bool = ReaderSettings.Defaults.readingHeaderTitleEnabled
     @AppStorage(ReaderSettings.Keys.readingHeaderChapterEnabled) private var readingHeaderChapterEnabled: Bool = ReaderSettings.Defaults.readingHeaderChapterEnabled
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
+    @AppStorage(ContextWords.Sides.storageKey) private var contextWordsSides = ContextWords.Sides.defaultValue.rawValue
+    @AppStorage(ReaderSettings.Keys.contextWordsOpacity) private var contextWordsOpacity: Double = ReaderSettings.Defaults.contextWordsOpacity
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
     @AppStorage(ReaderSettings.Keys.enclosingMarksSize) private var enclosingMarksSize: Double = ReaderSettings.Defaults.enclosingMarksSize
     @AppStorage(ReaderSettings.Keys.enclosingMarksOpacity) private var enclosingMarksOpacity: Double = ReaderSettings.Defaults.enclosingMarksOpacity
@@ -376,10 +412,14 @@ struct WhileReadingSections: View {
     /// on each tone's own faded opacity, so the same level reads differently
     /// from tone to tone.
     private var enclosingMarksOpacityPercent: Int {
-        let opacity = EnclosingMarksLayout.opacity(
-            level: enclosingMarksOpacity,
-            tone: ReaderTextTone.resolve(readerTextToneSelection)
-        )
+        let opacity = ReaderTextTone.resolve(readerTextToneSelection).opacity(level: enclosingMarksOpacity)
+        return Int((opacity * 100).rounded())
+    }
+
+    /// The context words' opacity while words play, in the current tone, as
+    /// for the marks.
+    private var contextWordsOpacityPercent: Int {
+        let opacity = ReaderTextTone.resolve(readerTextToneSelection).opacity(level: contextWordsOpacity)
         return Int((opacity * 100).rounded())
     }
 
@@ -398,9 +438,29 @@ struct WhileReadingSections: View {
         }
 
         Section {
-            Toggle(isOn: $contextWordsEnabled) {
+            Toggle(isOn: $contextWordsEnabled.animation()) {
                 Text("Previous and Next Words")
-                Text("Beside the word, readable only while paused")
+                Text("Beside the word, readable while paused")
+            }
+            if contextWordsEnabled {
+                ContextWordsPreview()
+                Picker("Show", selection: $contextWordsSides) {
+                    ForEach(ContextWords.Sides.allCases) { sides in
+                        Text(sides.displayName)
+                            .tag(sides.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                SettingsSliderRow(
+                    value: "\(contextWordsOpacityPercent)%",
+                    accessibilityLabel: "Previous and next word opacity while playing",
+                    accessibilityValue: "\(contextWordsOpacityPercent) percent",
+                    sliderValue: $contextWordsOpacity,
+                    in: 0...1,
+                    step: 0.05
+                ) {
+                    Text("Opacity While Playing")
+                }
             }
             Toggle(isOn: $enclosingMarksEnabled.animation()) {
                 Text("Open Quotes and Parentheses")

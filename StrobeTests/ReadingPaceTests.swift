@@ -13,7 +13,8 @@ struct ReadingPaceTests {
         sentencePause: Double = ReaderSettings.Defaults.sentencePauseMultiplier,
         punctuationPauses: PunctuationPauses = PunctuationPauses(),
         complexity: Bool = false,
-        intensity: Double = ReaderSettings.Defaults.complexityIntensity,
+        speedUp: Double = ReaderSettings.Defaults.complexitySpeedUpIntensity,
+        slowDown: Double = ReaderSettings.Defaults.complexitySlowDownIntensity,
         breaks: Bool = false,
         breakLength: Double = ReaderSettings.Defaults.sentenceBreakLength
     ) -> ReaderSettings.TimingSnapshot {
@@ -24,7 +25,8 @@ struct ReadingPaceTests {
             smartTimingMinimumWordLength: minimumWordLength,
             sentencePauseMultiplier: sentencePause,
             complexityTimingEnabled: complexity,
-            complexityIntensity: intensity,
+            complexitySpeedUpIntensity: speedUp,
+            complexitySlowDownIntensity: slowDown,
             punctuationPauses: punctuationPauses,
             sentenceBreakEnabled: breaks,
             sentenceBreakLength: breakLength
@@ -43,7 +45,8 @@ struct ReadingPaceTests {
             sentencePause: 2.5,
             punctuationPauses: PunctuationPauses(clause: 1.8, dash: 2.2, ellipsis: 1.1, bracket: 1.0)
         ),
-        timing(complexity: true, intensity: 1.0),
+        timing(complexity: true, speedUp: 1.0, slowDown: 1.0),
+        timing(complexity: true, speedUp: 0.2, slowDown: 0.9),
         timing(breaks: true, breakLength: 1.5),
         timing(pauses: true, breaks: true),
         timing(
@@ -53,7 +56,8 @@ struct ReadingPaceTests {
             pauses: true,
             sentencePause: 1.8,
             complexity: true,
-            intensity: 0.3,
+            speedUp: 0.3,
+            slowDown: 0.7,
             breaks: true,
             breakLength: 0.5
         ),
@@ -81,10 +85,11 @@ struct ReadingPaceTests {
         _ words: [String],
         at index: Int = 0,
         wordsPerMinute: Int,
+        paceFactor: Double = 1,
         timing: ReaderSettings.TimingSnapshot,
         scores: [Float]?
     ) -> RSVPEngine {
-        RSVPEngine(
+        let engine = RSVPEngine(
             words: words,
             currentIndex: index,
             wordsPerMinute: wordsPerMinute,
@@ -97,9 +102,12 @@ struct ReadingPaceTests {
             sentenceBreakEnabled: timing.sentenceBreakEnabled,
             sentenceBreakLength: timing.sentenceBreakLength,
             complexityTimingEnabled: timing.complexityTimingEnabled,
-            complexityIntensity: timing.complexityIntensity,
+            complexitySpeedUpIntensity: timing.complexitySpeedUpIntensity,
+            complexitySlowDownIntensity: timing.complexitySlowDownIntensity,
             complexityScores: scores
         )
+        engine.paceFactor = paceFactor
+        return engine
     }
 
     /// How long the engine plays `words`, from the first word's appearance to
@@ -110,10 +118,17 @@ struct ReadingPaceTests {
     private static func playbackDuration(
         of words: [String],
         wordsPerMinute: Int,
+        paceFactor: Double = 1,
         timing: ReaderSettings.TimingSnapshot,
         scores: [Float]?
     ) -> TimeInterval? {
-        let engine = makeEngine(words, wordsPerMinute: wordsPerMinute, timing: timing, scores: scores)
+        let engine = makeEngine(
+            words,
+            wordsPerMinute: wordsPerMinute,
+            paceFactor: paceFactor,
+            timing: timing,
+            scores: scores
+        )
         let firstWord = engine.nextInterval()
         engine.play()
         defer { engine.pause() }
@@ -134,7 +149,7 @@ struct ReadingPaceTests {
         ReadingPace.factor(words: words, complexityScores: scores, chapters: chapters, timing: timing)
     }
 
-    // MARK: - One timing for playback and estimates
+    // MARK: - One timing for playback and the factor
 
     /// The engine and the estimate time each word with the same function, and
     /// the engine hands it all of its settings.
@@ -162,8 +177,9 @@ struct ReadingPaceTests {
         }
     }
 
-    /// Played through, a document takes its plain time times its factor:
-    /// every word's time and every blank after a sentence, at any speed.
+    /// Played through at a plain base speed, a document takes its plain time
+    /// times its factor: every word's time and every blank after a sentence,
+    /// at any speed.
     @MainActor
     @Test func playbackTakesAsLongAsThePaceSays() throws {
         let words = Self.words
@@ -181,6 +197,40 @@ struct ReadingPaceTests {
                 let plain = Double(words.count) * 60 / Double(wordsPerMinute)
                 #expect(abs(played - plain * factor) < 0.001, "\(wordsPerMinute) wpm, \(timing)")
             }
+        }
+    }
+
+    /// Given its factor, the engine reads a document at its speed: the
+    /// timing settings' time comes out of the base speed, so the whole takes
+    /// its words over its speed, however much the settings add or take away.
+    @MainActor
+    @Test func paceFactorPlaysTheDocumentAtItsSpeed() throws {
+        let words = Self.words
+        let scores = Self.scores(for: words)
+        for timing in Self.timings {
+            let factor = Self.pace(words, scores: scores, timing: timing)
+            for wordsPerMinute in [1, 7] {
+                let duration = Self.playbackDuration(
+                    of: words,
+                    wordsPerMinute: wordsPerMinute,
+                    paceFactor: factor,
+                    timing: timing,
+                    scores: scores
+                )
+                let played = try #require(duration)
+                let plain = Double(words.count) * 60 / Double(wordsPerMinute)
+                #expect(abs(played - plain) < 0.001, "\(wordsPerMinute) wpm, \(timing)")
+            }
+        }
+    }
+
+    /// A factor that can't be right plays at the plain base speed.
+    @MainActor
+    @Test func unusablePaceFactorPlaysPlain() {
+        let unusable: [Double] = [0, -1, .nan, .infinity]
+        for factor in unusable {
+            let engine = Self.makeEngine(["plain"], wordsPerMinute: 300, paceFactor: factor, timing: Self.timing(), scores: nil)
+            #expect(abs(engine.nextInterval() - 0.2) < 1e-12, "\(factor)")
         }
     }
 
@@ -226,9 +276,14 @@ struct ReadingPaceTests {
         #expect(abs(Self.pace(["hello"], timing: Self.timing(smartTiming: true, percentPerLetter: 10)) - 1.5) < 1e-9)
         // A sentence end pausing twice as long.
         #expect(abs(Self.pace(["Hello", "world."], timing: Self.timing(pauses: true, sentencePause: 2)) - 1.5) < 1e-9)
-        // Complexity at full intensity: score 1 takes 1.6 intervals.
-        let complex = Self.timing(complexity: true, intensity: 1)
+        // Complexity at full intensity: score 1 takes 1.6 intervals, and
+        // score 0 0.4.
+        let complex = Self.timing(complexity: true, speedUp: 1, slowDown: 1)
         #expect(abs(Self.pace(["a", "b"], scores: [1, 1], timing: complex) - 1.6) < 1e-9)
+        #expect(abs(Self.pace(["a", "b"], scores: [0, 1], timing: complex) - 1) < 1e-9)
+        // Each direction on its own.
+        let slowOnly = Self.timing(complexity: true, speedUp: 0, slowDown: 1)
+        #expect(abs(Self.pace(["a", "b"], scores: [0, 1], timing: slowOnly) - 1.3) < 1e-9)
         // Without scores, as for a document not yet backfilled, complexity
         // changes nothing, as in the engine.
         #expect(Self.pace(["a", "b"], timing: complex) == 1)
@@ -263,17 +318,15 @@ struct ReadingPaceTests {
         #expect(Self.pace([], timing: Self.timing(smartTiming: true, pauses: true)) == 1)
     }
 
-    @Test func paceStretchesTheMinutes() {
-        #expect(ReadingTime.minutes(words: 3000, wordsPerMinute: 300, paceFactor: 1.5) == 15)
-        #expect(ReadingTime.minutes(words: 3000, wordsPerMinute: 150, paceFactor: 1.5) == 30)
-        #expect(ReadingTime.minutes(words: 100, wordsPerMinute: 300, paceFactor: 1.5) == 1)
-        #expect(ReadingTime.minutes(words: 0, wordsPerMinute: 300, paceFactor: 2) == 0)
-        #expect(ReadingTime.minutes(words: 301, wordsPerMinute: 300, paceFactor: 1) == 2)
-        // A factor that can't be right leaves the plain estimate.
-        let unusable: [Double] = [0, -1, .nan, .infinity]
-        for factor in unusable {
-            #expect(ReadingTime.minutes(words: 301, wordsPerMinute: 300, paceFactor: factor) == 2)
-        }
+    /// The speed counts every pause, so a document's time is its words over
+    /// its speed, rounded up to whole minutes.
+    @Test func minutesAreWordsOverTheSpeed() {
+        #expect(ReadingTime.minutes(words: 3000, wordsPerMinute: 300) == 10)
+        #expect(ReadingTime.minutes(words: 3000, wordsPerMinute: 150) == 20)
+        #expect(ReadingTime.minutes(words: 100, wordsPerMinute: 300) == 1)
+        #expect(ReadingTime.minutes(words: 0, wordsPerMinute: 300) == 0)
+        #expect(ReadingTime.minutes(words: 301, wordsPerMinute: 300) == 2)
+        #expect(ReadingTime.minutes(words: 301, wordsPerMinute: 0) == 0)
     }
 
     // MARK: - The cache
@@ -288,7 +341,8 @@ struct ReadingPaceTests {
             (Keys.smartTimingMinimumWordLength, 5),
             (Keys.sentencePauseMultiplier, 2.0),
             (Keys.complexityTimingEnabled, true),
-            (Keys.complexityIntensity, 0.9),
+            (Keys.complexitySpeedUpIntensity, 0.9),
+            (Keys.complexitySlowDownIntensity, 0.9),
             (Keys.clausePauseMultiplier, 1.9),
             (Keys.dashPauseMultiplier, 1.9),
             (Keys.ellipsisPauseMultiplier, 1.9),
@@ -348,18 +402,14 @@ struct ReadingPaceTests {
             title: "Pace",
             fileName: "pace.txt",
             bookmarkData: Data(),
-            words: ["Hello", "world."],
-            wordsPerMinute: 1
+            words: ["Hello", "world."]
         )
-        // Plain until it's worked out: 1 word left at 1 wpm.
         #expect(pace.factor(for: document) == nil)
-        #expect(pace.remainingMinutes(for: document) == 1)
 
         let worked = await pace.preparedFactor(for: document)
         let factor = try #require(worked)
         #expect(abs(factor - 1.5) < 1e-9)
         #expect(pace.factor(for: document) == factor)
-        #expect(pace.remainingMinutes(for: document) == 2)
 
         // The next launch reads it back.
         let relaunched = ReadingPace(defaults: defaults, cacheURL: cacheURL)

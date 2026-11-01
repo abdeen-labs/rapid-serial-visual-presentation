@@ -41,7 +41,7 @@ struct WordPopTests {
     /// spare, whether timing stretches the word or complexity timing
     /// shortens it, as far as its plainest words at full intensity.
     @Test func popEndsWellInsideEveryWord() {
-        let shortest = RSVPEngine.complexityMultiplier(score: 0, intensity: 1)
+        let shortest = RSVPEngine.complexityMultiplier(score: 0, speedUp: 1, slowDown: 1)
         #expect(shortest < 1)
         for speed in Self.speeds {
             let base = Self.baseInterval(speed)

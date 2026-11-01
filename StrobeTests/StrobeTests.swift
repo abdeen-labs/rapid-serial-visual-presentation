@@ -522,18 +522,57 @@ struct StrobeTests {
     // MARK: - Complexity timing
 
     @Test func complexityMultiplierAtMidpointIsUnity() {
-        let multiplier = RSVPEngine.complexityMultiplier(score: 0.5, intensity: 1.0)
+        let multiplier = RSVPEngine.complexityMultiplier(score: 0.5, speedUp: 1.0, slowDown: 1.0)
         #expect(multiplier == 1.0)
     }
 
     @Test func complexityMultiplierSpeedsUpSimpleWords() {
-        let multiplier = RSVPEngine.complexityMultiplier(score: 0.0, intensity: 1.0)
-        #expect(multiplier < 1.0)
+        let multiplier = RSVPEngine.complexityMultiplier(score: 0.0, speedUp: 1.0, slowDown: 1.0)
+        #expect(abs(multiplier - 0.4) < 1e-9)
     }
 
     @Test func complexityMultiplierSlowsComplexWords() {
-        let multiplier = RSVPEngine.complexityMultiplier(score: 1.0, intensity: 1.0)
-        #expect(multiplier > 1.0)
+        let multiplier = RSVPEngine.complexityMultiplier(score: 1.0, speedUp: 1.0, slowDown: 1.0)
+        #expect(abs(multiplier - 1.6) < 1e-9)
+    }
+
+    /// Each side of average follows its own intensity and ignores the
+    /// other's.
+    @Test func complexitySpeedUpAndSlowDownAreIndependent() {
+        #expect(RSVPEngine.complexityMultiplier(score: 0.0, speedUp: 0, slowDown: 1) == 1)
+        #expect(RSVPEngine.complexityMultiplier(score: 1.0, speedUp: 1, slowDown: 0) == 1)
+        #expect(abs(RSVPEngine.complexityMultiplier(score: 0.25, speedUp: 0.5, slowDown: 1) - 0.85) < 1e-9)
+        #expect(abs(RSVPEngine.complexityMultiplier(score: 0.75, speedUp: 1, slowDown: 0.5) - 1.15) < 1e-9)
+        // An average word is never changed.
+        #expect(RSVPEngine.complexityMultiplier(score: 0.5, speedUp: 0.3, slowDown: 0.9) == 1)
+    }
+
+    /// The one intensity from before moves into both of its replacements,
+    /// once, and leaves either alone once it's set.
+    @Test func legacyComplexityIntensityMovesIntoBothDirections() throws {
+        typealias Keys = ReaderSettings.Keys
+        let suiteName = "ReaderSettingsTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(0.8, forKey: Keys.legacyComplexityIntensity)
+        ReaderSettings.migrate(defaults)
+        #expect(defaults.object(forKey: Keys.legacyComplexityIntensity) == nil)
+        let snapshot = ReaderSettings.timingSnapshot(from: defaults)
+        #expect(snapshot.complexitySpeedUpIntensity == 0.8)
+        #expect(snapshot.complexitySlowDownIntensity == 0.8)
+
+        // Nothing to move: the settings stay as they are.
+        defaults.set(0.2, forKey: Keys.complexitySpeedUpIntensity)
+        ReaderSettings.migrate(defaults)
+        #expect(defaults.double(forKey: Keys.complexitySpeedUpIntensity) == 0.2)
+        #expect(defaults.double(forKey: Keys.complexitySlowDownIntensity) == 0.8)
+
+        // A fresh install has nothing to move and keeps the defaults.
+        defaults.removePersistentDomain(forName: suiteName)
+        ReaderSettings.migrate(defaults)
+        #expect(defaults.object(forKey: Keys.complexitySpeedUpIntensity) == nil)
+        #expect(defaults.object(forKey: Keys.complexitySlowDownIntensity) == nil)
     }
 
     /// ReaderSettings.timingSnapshot seeds RSVPEngine before @AppStorage is
@@ -554,7 +593,8 @@ struct StrobeTests {
         #expect(snapshot.smartTimingMinimumWordLength == engine.smartTimingMinimumWordLength)
         #expect(snapshot.sentencePauseMultiplier == engine.sentencePauseMultiplier)
         #expect(snapshot.complexityTimingEnabled == engine.complexityTimingEnabled)
-        #expect(snapshot.complexityIntensity == engine.complexityIntensity)
+        #expect(snapshot.complexitySpeedUpIntensity == engine.complexitySpeedUpIntensity)
+        #expect(snapshot.complexitySlowDownIntensity == engine.complexitySlowDownIntensity)
     }
 
     @Test func readerSettingsSnapshotReadsStoredValues() throws {
@@ -577,8 +617,8 @@ struct StrobeTests {
     }
 
     @Test func complexityMultiplierAtZeroIntensityIsUnity() {
-        let low = RSVPEngine.complexityMultiplier(score: 0.0, intensity: 0.0)
-        let high = RSVPEngine.complexityMultiplier(score: 1.0, intensity: 0.0)
+        let low = RSVPEngine.complexityMultiplier(score: 0.0, speedUp: 0.0, slowDown: 0.0)
+        let high = RSVPEngine.complexityMultiplier(score: 1.0, speedUp: 0.0, slowDown: 0.0)
         #expect(low == 1.0)
         #expect(high == 1.0)
     }

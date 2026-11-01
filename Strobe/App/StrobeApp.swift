@@ -22,6 +22,7 @@ struct StrobeApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        ReaderSettings.migrate()
         let container = Self.sharedBootstrap.container
         shareInboxImporter = container.map { ShareInboxImporter(container: $0) }
         if let container {

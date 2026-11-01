@@ -40,9 +40,7 @@ extension DocumentEntity {
     @MainActor
     init(document: Document) {
         let status = document.readingStatus
-        // At the document's pace when it's known. Listing documents doesn't
-        // wait for any to be worked out.
-        let remainingMinutes = ReadingPace.shared.remainingMinutes(for: document)
+        let remainingMinutes = document.remainingMinutes
         let timeLeft = ReadingTime.label(minutes: remainingMinutes)
         id = document.id
         switch status {

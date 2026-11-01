@@ -16,7 +16,8 @@ struct TimingSections: View {
     @AppStorage(ReaderSettings.Keys.sentenceBreakEnabled) private var sentenceBreakEnabled: Bool = ReaderSettings.Defaults.sentenceBreakEnabled
     @AppStorage(ReaderSettings.Keys.sentenceBreakLength) private var sentenceBreakLength: Double = ReaderSettings.Defaults.sentenceBreakLength
     @AppStorage(ReaderSettings.Keys.complexityTimingEnabled) private var complexityTimingEnabled: Bool = ReaderSettings.Defaults.complexityTimingEnabled
-    @AppStorage(ReaderSettings.Keys.complexityIntensity) private var complexityIntensity: Double = ReaderSettings.Defaults.complexityIntensity
+    @AppStorage(ReaderSettings.Keys.complexitySpeedUpIntensity) private var complexitySpeedUpIntensity: Double = ReaderSettings.Defaults.complexitySpeedUpIntensity
+    @AppStorage(ReaderSettings.Keys.complexitySlowDownIntensity) private var complexitySlowDownIntensity: Double = ReaderSettings.Defaults.complexitySlowDownIntensity
 
     /// The punctuation types with their own pause multiplier.
     private enum PauseType: CaseIterable, Identifiable {
@@ -106,7 +107,7 @@ struct TimingSections: View {
             }
         } footer: {
             if smartTimingEnabled {
-                Text("Words shorter than the minimum show at your exact speed.")
+                Text("Words shorter than the minimum get no extra time.")
             }
         }
 
@@ -155,7 +156,7 @@ struct TimingSections: View {
             }
         } footer: {
             if sentenceBreakEnabled {
-                Text("Measured in words at your reading speed.")
+                Text("Measured in words.")
             }
         }
 
@@ -166,17 +167,25 @@ struct TimingSections: View {
             }
             if complexityTimingEnabled {
                 SettingsSliderRow(
-                    "Intensity",
-                    value: "\(Int((complexityIntensity * 100).rounded()))%",
-                    accessibilityValue: "\(Int((complexityIntensity * 100).rounded())) percent",
-                    sliderValue: $complexityIntensity,
+                    "Simple Words",
+                    value: "\(Int((complexitySpeedUpIntensity * 100).rounded()))%",
+                    accessibilityValue: "\(Int((complexitySpeedUpIntensity * 100).rounded())) percent",
+                    sliderValue: $complexitySpeedUpIntensity,
+                    in: 0...1,
+                    step: 0.05
+                )
+                SettingsSliderRow(
+                    "Complex Words",
+                    value: "\(Int((complexitySlowDownIntensity * 100).rounded()))%",
+                    accessibilityValue: "\(Int((complexitySlowDownIntensity * 100).rounded())) percent",
+                    sliderValue: $complexitySlowDownIntensity,
                     in: 0...1,
                     step: 0.05
                 )
             }
         } footer: {
             if complexityTimingEnabled {
-                Text("Speeds up common words and slows down rare ones. Higher intensity means more variation.")
+                Text("Speeds up simple, common words and slows down complex, rare ones. Higher means a bigger change.")
             }
         }
     }

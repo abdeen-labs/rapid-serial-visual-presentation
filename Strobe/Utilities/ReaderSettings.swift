@@ -18,7 +18,10 @@ enum ReaderSettings {
         nonisolated static let smartTimingMinimumWordLength = "smartTimingMinimumWordLength"
         nonisolated static let sentencePauseMultiplier = "sentencePauseMultiplier"
         nonisolated static let complexityTimingEnabled = "complexityTimingEnabled"
-        nonisolated static let complexityIntensity = "complexityIntensity"
+        /// How much complexity timing speeds up simple words.
+        nonisolated static let complexitySpeedUpIntensity = "complexitySpeedUpIntensity"
+        /// How much complexity timing slows down complex words.
+        nonisolated static let complexitySlowDownIntensity = "complexitySlowDownIntensity"
         nonisolated static let clausePauseMultiplier = "clausePauseMultiplier"
         nonisolated static let dashPauseMultiplier = "dashPauseMultiplier"
         nonisolated static let ellipsisPauseMultiplier = "ellipsisPauseMultiplier"
@@ -31,6 +34,7 @@ enum ReaderSettings {
         nonisolated static let sentenceBreakEnabled = "sentenceBreakEnabled"
         nonisolated static let sentenceBreakLength = "sentenceBreakLength"
         nonisolated static let contextWordsEnabled = "contextWordsEnabled"
+        nonisolated static let contextWordsOpacity = "contextWordsOpacity"
         nonisolated static let enclosingMarksEnabled = "enclosingMarksEnabled"
         nonisolated static let enclosingMarksSize = "enclosingMarksSize"
         nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
@@ -56,6 +60,11 @@ enum ReaderSettings {
         /// The app version up to which What's New has been seen: a
         /// `MARKETING_VERSION` string (``WhatsNew``).
         nonisolated static let lastSeenWhatsNewVersion = "lastSeenWhatsNewVersion"
+
+        /// Complexity timing's one intensity, before it became
+        /// ``complexitySpeedUpIntensity`` and ``complexitySlowDownIntensity``.
+        /// Read only to move it (``migrate(_:)``).
+        nonisolated static let legacyComplexityIntensity = "complexityIntensity"
     }
 
     enum Defaults {
@@ -67,7 +76,8 @@ enum ReaderSettings {
         nonisolated static let smartTimingMinimumWordLength = 1
         nonisolated static let sentencePauseMultiplier = 1.5
         nonisolated static let complexityTimingEnabled = false
-        nonisolated static let complexityIntensity = 0.5
+        nonisolated static let complexitySpeedUpIntensity = 0.5
+        nonisolated static let complexitySlowDownIntensity = 0.5
         nonisolated static let clausePauseMultiplier = 1.3
         nonisolated static let dashPauseMultiplier = 1.4
         nonisolated static let ellipsisPauseMultiplier = 1.5
@@ -80,12 +90,15 @@ enum ReaderSettings {
         nonisolated static let sentenceBreakEnabled = false
         nonisolated static let sentenceBreakLength = 1.0
         nonisolated static let contextWordsEnabled = false
+        /// A level from 0 to 1 for while words play. This one is the tone's
+        /// dim text, barely visible; see `ContextWords.opacity(isPlaying:level:tone:)`.
+        nonisolated static let contextWordsOpacity = 0.0
         nonisolated static let enclosingMarksEnabled = false
         /// A multiple of the marks' standard size; see `EnclosingMarksLayout.sizeRange`.
         nonisolated static let enclosingMarksSize = 1.0
         /// A level from 0 to 1. This one is the tone's faded text; see
-        /// `EnclosingMarksLayout.opacity(level:tone:)`.
-        nonisolated static let enclosingMarksOpacity = 0.5
+        /// `ReaderTextTone.opacity(level:)`.
+        nonisolated static let enclosingMarksOpacity = ReaderTextTone.fadedLevel
         nonisolated static let wordPopEnabled = false
         nonisolated static let readAloudEnabled = false
         /// A Kokoro voice name: ``KokoroVoices/defaultVoice``. A stored
@@ -117,7 +130,8 @@ enum ReaderSettings {
         let smartTimingMinimumWordLength: Int
         let sentencePauseMultiplier: Double
         let complexityTimingEnabled: Bool
-        let complexityIntensity: Double
+        let complexitySpeedUpIntensity: Double
+        let complexitySlowDownIntensity: Double
         let punctuationPauses: PunctuationPauses
         let sentenceBreakEnabled: Bool
         let sentenceBreakLength: Double
@@ -139,8 +153,10 @@ enum ReaderSettings {
                 ?? Defaults.sentencePauseMultiplier,
             complexityTimingEnabled: defaults.object(forKey: Keys.complexityTimingEnabled) as? Bool
                 ?? Defaults.complexityTimingEnabled,
-            complexityIntensity: defaults.object(forKey: Keys.complexityIntensity) as? Double
-                ?? Defaults.complexityIntensity,
+            complexitySpeedUpIntensity: defaults.object(forKey: Keys.complexitySpeedUpIntensity) as? Double
+                ?? Defaults.complexitySpeedUpIntensity,
+            complexitySlowDownIntensity: defaults.object(forKey: Keys.complexitySlowDownIntensity) as? Double
+                ?? Defaults.complexitySlowDownIntensity,
             punctuationPauses: PunctuationPauses(
                 clause: defaults.object(forKey: Keys.clausePauseMultiplier) as? Double
                     ?? Defaults.clausePauseMultiplier,
@@ -156,5 +172,19 @@ enum ReaderSettings {
             sentenceBreakLength: defaults.object(forKey: Keys.sentenceBreakLength) as? Double
                 ?? Defaults.sentenceBreakLength
         )
+    }
+
+    /// Moves settings stored under keys a later version replaced. Runs at
+    /// launch, before anything reads them.
+    nonisolated static func migrate(_ defaults: UserDefaults = .standard) {
+        // Complexity timing's one intensity became one for each direction,
+        // and both start where it was.
+        if let intensity = defaults.object(forKey: Keys.legacyComplexityIntensity) as? Double {
+            for key in [Keys.complexitySpeedUpIntensity, Keys.complexitySlowDownIntensity]
+            where defaults.object(forKey: key) == nil {
+                defaults.set(intensity, forKey: key)
+            }
+            defaults.removeObject(forKey: Keys.legacyComplexityIntensity)
+        }
     }
 }

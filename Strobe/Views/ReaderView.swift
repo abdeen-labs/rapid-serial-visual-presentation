@@ -33,7 +33,8 @@ struct ReaderView: View {
     @AppStorage(ReaderSettings.Keys.smartTimingMinimumWordLength) private var smartTimingMinimumWordLength: Int = ReaderSettings.Defaults.smartTimingMinimumWordLength
     @AppStorage(ReaderSettings.Keys.sentencePauseMultiplier) private var sentencePauseMultiplierValue: Double = ReaderSettings.Defaults.sentencePauseMultiplier
     @AppStorage(ReaderSettings.Keys.complexityTimingEnabled) private var complexityTimingEnabled: Bool = ReaderSettings.Defaults.complexityTimingEnabled
-    @AppStorage(ReaderSettings.Keys.complexityIntensity) private var complexityIntensity: Double = ReaderSettings.Defaults.complexityIntensity
+    @AppStorage(ReaderSettings.Keys.complexitySpeedUpIntensity) private var complexitySpeedUpIntensity: Double = ReaderSettings.Defaults.complexitySpeedUpIntensity
+    @AppStorage(ReaderSettings.Keys.complexitySlowDownIntensity) private var complexitySlowDownIntensity: Double = ReaderSettings.Defaults.complexitySlowDownIntensity
     @AppStorage(ReaderSettings.Keys.clausePauseMultiplier) private var clausePauseMultiplier: Double = ReaderSettings.Defaults.clausePauseMultiplier
     @AppStorage(ReaderSettings.Keys.dashPauseMultiplier) private var dashPauseMultiplier: Double = ReaderSettings.Defaults.dashPauseMultiplier
     @AppStorage(ReaderSettings.Keys.ellipsisPauseMultiplier) private var ellipsisPauseMultiplier: Double = ReaderSettings.Defaults.ellipsisPauseMultiplier
@@ -43,6 +44,8 @@ struct ReaderView: View {
     @AppStorage(ReaderSettings.Keys.holdToReadEnabled) private var holdToReadEnabled: Bool = ReaderSettings.Defaults.holdToReadEnabled
     @AppStorage(ReaderSettings.Keys.holdSpeedAdjustEnabled) private var holdSpeedAdjustEnabled: Bool = ReaderSettings.Defaults.holdSpeedAdjustEnabled
     @AppStorage(ReaderSettings.Keys.contextWordsEnabled) private var contextWordsEnabled: Bool = ReaderSettings.Defaults.contextWordsEnabled
+    @AppStorage(ContextWords.Sides.storageKey) private var contextWordsSides = ContextWords.Sides.defaultValue.rawValue
+    @AppStorage(ReaderSettings.Keys.contextWordsOpacity) private var contextWordsOpacity: Double = ReaderSettings.Defaults.contextWordsOpacity
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
     @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
     @AppStorage(ReaderSettings.Keys.readAloudEnabled) private var readAloudEnabled: Bool = ReaderSettings.Defaults.readAloudEnabled
@@ -126,7 +129,8 @@ struct ReaderView: View {
             sentenceBreakEnabled: timing.sentenceBreakEnabled,
             sentenceBreakLength: timing.sentenceBreakLength,
             complexityTimingEnabled: timing.complexityTimingEnabled,
-            complexityIntensity: timing.complexityIntensity
+            complexitySpeedUpIntensity: timing.complexitySpeedUpIntensity,
+            complexitySlowDownIntensity: timing.complexitySlowDownIntensity
         ))
         self._wpmSliderValue = State(initialValue: Double(document.wordsPerMinute))
     }
@@ -222,7 +226,8 @@ struct ReaderView: View {
                         CurrentWordView(
                             engine: engine,
                             fontSize: CGFloat(fontSize),
-                            showsContext: contextWordsEnabled,
+                            contextSides: contextWordsEnabled ? ContextWords.Sides.resolve(contextWordsSides) : nil,
+                            contextOpacityLevel: contextWordsOpacity,
                             contextIsRightToLeft: isRightToLeftDocument,
                             popsWords: wordPopEnabled
                         )
@@ -315,10 +320,14 @@ struct ReaderView: View {
         .task(id: enclosingMarksEnabled && isLoaded) {
             await pairEnclosingMarksIfNeeded()
         }
-        // The time left follows the timing settings once the document's pace
-        // is worked out, and again after they change.
+        // The speed counts every pause once the document's pace is worked
+        // out, and again after the timing settings change. Until the new
+        // factor is known, the last one stands.
         .task(id: ReadingPace.shared.key(for: document)) {
             ReadingPace.shared.prepare(document)
+        }
+        .onChange(of: ReadingPace.shared.factor(for: document), initial: true) { _, factor in
+            if let factor { engine.paceFactor = factor }
         }
         // Reading aloud follows its settings and the voice model's download
         // while the reader is open.
@@ -439,8 +448,11 @@ struct ReaderView: View {
                 backfillComplexityScores()
             }
         }
-        .onChange(of: complexityIntensity) { _, newValue in
-            engine.complexityIntensity = newValue
+        .onChange(of: complexitySpeedUpIntensity) { _, newValue in
+            engine.complexitySpeedUpIntensity = newValue
+        }
+        .onChange(of: complexitySlowDownIntensity) { _, newValue in
+            engine.complexitySlowDownIntensity = newValue
         }
         .onChange(of: punctuationPauses) { _, newValue in
             engine.punctuationPauses = newValue
@@ -804,17 +816,12 @@ struct ReaderView: View {
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        // A voice reads at the plain speed, whatever the timing settings
-        // the document's pace follows.
-        let paceFactor = readAloud.isReadingAloud ? nil : ReadingPace.shared.factor(for: document)
-
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             if !document.chapters.isEmpty {
                 ChapterNavigationView(
                     chapters: document.chapters,
                     engine: engine,
                     wordsPerMinute: displayedWPM,
-                    paceFactor: paceFactor,
                     furthestWordIndex: document.displayedFurthestWordIndex,
                     showChapterPicker: $showChapterPicker
                 ) {
@@ -828,7 +835,6 @@ struct ReaderView: View {
             ReaderProgressView(
                 engine: engine,
                 wordsPerMinute: displayedWPM,
-                paceFactor: paceFactor,
                 showCompletion: $showCompletion
             )
 
@@ -1188,7 +1194,10 @@ private struct SecondFingerDetector: ViewModifier {
 private struct CurrentWordView: View {
     let engine: RSVPEngine
     let fontSize: CGFloat
-    let showsContext: Bool
+    /// The neighbours that show, or nil while context words are off.
+    let contextSides: ContextWords.Sides?
+    /// The context words' opacity setting while words play.
+    let contextOpacityLevel: Double
     let contextIsRightToLeft: Bool
     /// Whether each new word pops in while playing (see ``WordPop``).
     let popsWords: Bool
@@ -1199,9 +1208,10 @@ private struct CurrentWordView: View {
         WordView(
             word: engine.currentWord,
             fontSize: fontSize,
-            context: showsContext ? ContextWords.neighbors(of: engine.currentIndex, in: engine.words) : nil,
+            context: contextSides.map { ContextWords.neighbors(of: engine.currentIndex, in: engine.words, sides: $0) },
             contextIsRightToLeft: contextIsRightToLeft,
-            contextIsDimmed: showsContext && engine.isPlaying,
+            contextIsPlaying: contextSides != nil && engine.isPlaying,
+            contextOpacityLevel: contextOpacityLevel,
             pop: popsWords ? WordPop.readerCue(
                 index: engine.currentIndex,
                 isShown: isWordShown,
@@ -1301,7 +1311,6 @@ private struct ReaderProgressView: View {
     /// The speed the time left is worked out at: the slider's while it's
     /// dragged, so the time follows it.
     let wordsPerMinute: Int
-    let paceFactor: Double?
     @Binding var showCompletion: Bool
     @State private var isScrubbing = false
     @State private var width: CGFloat = 0
@@ -1312,7 +1321,7 @@ private struct ReaderProgressView: View {
         let percent = progress > 0 ? max(1, Int(progress * 100)) : 0
         let remainingWords = max(0, engine.words.count - 1 - engine.currentIndex)
         let minutesLeft = remainingWords > 0
-            ? ReadingTime.minutes(words: remainingWords, wordsPerMinute: wordsPerMinute, paceFactor: paceFactor ?? 1)
+            ? ReadingTime.minutes(words: remainingWords, wordsPerMinute: wordsPerMinute)
             : nil
 
         VStack(spacing: 10) {

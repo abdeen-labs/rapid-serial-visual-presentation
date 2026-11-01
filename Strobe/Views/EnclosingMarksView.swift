@@ -64,27 +64,6 @@ nonisolated enum EnclosingMarksLayout {
         guard fontSize >= minimumFontSize else { return nil }
         return Metrics(fontSize: fontSize, offset: inner + fontSize * slotHeightRatio / 2)
     }
-
-    /// The marks' opacity, as a fraction of the tone's text color, at an
-    /// opacity setting of `level`, from 0 to 1.
-    ///
-    /// The setting's default is the tone's faded text, the marks' original
-    /// look. Below it they fade linearly toward the tone's dim text, faint
-    /// but still visible, and above it toward the full text color, the
-    /// word's own. Each tone tunes its faded and dim opacities to the same
-    /// contrast, so the default and everything below it look about as quiet
-    /// in every tone.
-    static func opacity(level: Double, tone: ReaderTextTone) -> Double {
-        let middle = ReaderSettings.Defaults.enclosingMarksOpacity
-        let level = min(max(level, 0), 1)
-        // Weighted rather than offset, so the ends of each half are exact.
-        if level <= middle {
-            let t = level / middle
-            return tone.dimTextOpacity * (1 - t) + tone.fadedTextOpacity * t
-        }
-        let t = (level - middle) / (1 - middle)
-        return tone.fadedTextOpacity * (1 - t) + t
-    }
 }
 
 /// The opening marks of the quotations and parentheses the current word is
@@ -127,7 +106,7 @@ struct EnclosingMarksView: View {
                     metrics: metrics,
                     font: ReaderFont.resolve(readerFontSelection),
                     tone: tone,
-                    opacity: EnclosingMarksLayout.opacity(level: enclosingMarksOpacity, tone: tone)
+                    opacity: tone.opacity(level: enclosingMarksOpacity)
                 )
                 .frame(width: geo.size.width, height: geo.size.height)
                 .transition(.opacity)
@@ -180,7 +159,7 @@ private struct EnclosingMarksText: View, Equatable {
     let font: ReaderFont
     let tone: ReaderTextTone
     /// A fraction of the tone's text color; see
-    /// `EnclosingMarksLayout.opacity(level:tone:)`.
+    /// `ReaderTextTone.opacity(level:)`.
     let opacity: Double
 
     var body: some View {
@@ -231,7 +210,7 @@ struct EnclosingMarksPreview: View {
     var body: some View {
         let wordFontSize = CGFloat(fontSize)
         let tone = ReaderTextTone.resolve(readerTextToneSelection)
-        let opacity = EnclosingMarksLayout.opacity(level: enclosingMarksOpacity, tone: tone)
+        let opacity = tone.opacity(level: enclosingMarksOpacity)
         let metrics = EnclosingMarksLayout.Metrics(
             fontSize: EnclosingMarksLayout.preferredFontSize(wordFontSize: wordFontSize, scale: CGFloat(enclosingMarksSize)),
             offset: 0

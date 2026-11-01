@@ -19,9 +19,8 @@ extension Document {
     }
 
     /// Minutes to finish from the resume position at the document's speed,
-    /// stretched by its ``ReadingPace`` factor. Nil, before the factor is
-    /// known, gives the plain estimate.
-    func remainingMinutes(paceFactor: Double?) -> Int {
-        ReadingTime.minutes(words: remainingWordCount, wordsPerMinute: wordsPerMinute, paceFactor: paceFactor ?? 1)
+    /// which counts the timing settings' pauses (see ``ReadingPace``).
+    var remainingMinutes: Int {
+        ReadingTime.minutes(words: remainingWordCount, wordsPerMinute: wordsPerMinute)
     }
 }

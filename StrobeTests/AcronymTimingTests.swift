@@ -282,7 +282,8 @@ struct AcronymTimingTests {
             sentencePauseEnabled: pauses,
             smartTimingMinimumWordLength: minimumWordLength,
             complexityTimingEnabled: complexityScore != nil,
-            complexityIntensity: 1.0,
+            complexitySpeedUpIntensity: 1.0,
+            complexitySlowDownIntensity: 1.0,
             complexityScores: complexityScore.map { Array(repeating: $0, count: words.count) }
         ).nextInterval()
     }

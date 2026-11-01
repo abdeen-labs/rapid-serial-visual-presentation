@@ -445,6 +445,21 @@ struct ReadAloudEngineTests {
         #expect(pacer.contexts.last?.wordsPerMinute == 320)
     }
 
+    /// A voice reads at the speed itself, so a new pace factor reaches it
+    /// neither as a speed nor as a timing change.
+    @MainActor
+    @Test func paceFactorDoesNotReachThePacer() {
+        let (engine, pacer) = pacedEngine("One, two. Three four five.")
+        defer { engine.pause() }
+        engine.paceFactor = 1.5
+        engine.play()
+        #expect(pacer.contexts.last?.wordsPerMinute == engine.wordsPerMinute)
+        engine.paceFactor = 2
+        #expect(pacer.speeds.isEmpty)
+        #expect(pacer.timings.isEmpty)
+        #expect(pacer.contexts.count == 1)
+    }
+
     /// Timing changes while playing reach the pacer, which takes the
     /// sentence breaks' from them, without restarting it or the timer.
     @MainActor
@@ -461,8 +476,9 @@ struct ReadAloudEngineTests {
         engine.sentenceBreakEnabled = true
         engine.sentenceBreakLength = 3
         engine.complexityTimingEnabled = true
-        engine.complexityIntensity = 1
-        #expect(pacer.timings.count == 10)
+        engine.complexitySpeedUpIntensity = 1
+        engine.complexitySlowDownIntensity = 1
+        #expect(pacer.timings.count == 11)
         #expect(pacer.timings.last?.sentenceBreakEnabled == true)
         #expect(pacer.timings.last?.sentenceBreakLength == 3)
         #expect(pacer.timings.last?.smartTimingEnabled == true)
@@ -475,16 +491,16 @@ struct ReadAloudEngineTests {
         // Setting a value it has, or the speed alone, passes nothing on.
         engine.sentenceBreakLength = 3
         engine.wordsPerMinute = 400
-        #expect(pacer.timings.count == 10)
+        #expect(pacer.timings.count == 11)
         #expect(pacer.speeds == [400])
 
         // Paused, the next start takes them.
         engine.pause()
         engine.sentenceBreakEnabled = false
-        #expect(pacer.timings.count == 10)
+        #expect(pacer.timings.count == 11)
         engine.play()
         #expect(pacer.contexts.last?.timing.sentenceBreakEnabled == false)
         engine.sentenceBreakLength = 3
-        #expect(pacer.timings.count == 10)
+        #expect(pacer.timings.count == 11)
     }
 }

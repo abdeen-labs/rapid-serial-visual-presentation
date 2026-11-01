@@ -11,9 +11,8 @@ import SwiftUI
 struct ChapterNavigationView: View {
     let chapters: [Chapter]
     let engine: RSVPEngine
-    /// The speed and pace factor the chapter list gives lengths at.
+    /// The speed the chapter list gives lengths at.
     let wordsPerMinute: Int
-    let paceFactor: Double?
     /// The furthest word read as last saved. The list marks chapters up to
     /// it, or up to the furthest played here if that's further, as read.
     let furthestWordIndex: Int
@@ -123,8 +122,7 @@ struct ChapterNavigationView: View {
                             let (start, end) = ChapterListView.chapterBounds(at: i, chapters: chapters, totalWordCount: totalWordCount)
                             let minutes = ReadingTime.minutes(
                                 words: max(0, end - start),
-                                wordsPerMinute: wordsPerMinute,
-                                paceFactor: paceFactor ?? 1
+                                wordsPerMinute: wordsPerMinute
                             )
                             let state = rowState(at: i, activeIndex: activeIndex, furthest: furthest, totalWordCount: totalWordCount)
 

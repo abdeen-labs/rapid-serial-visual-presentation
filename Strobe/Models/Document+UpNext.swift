@@ -21,12 +21,11 @@ extension Document {
 }
 
 extension ContinueReadingSnapshot {
-    /// The snapshot of a library: its ``Document/upNext(in:)`` document, with
-    /// its time left at its factor in `pace` once that's known.
+    /// The snapshot of a library: its ``Document/upNext(in:)`` document.
     @MainActor
-    init(documents: [Document], pace: ReadingPace? = nil) {
+    init(documents: [Document]) {
         self.init(
-            item: Document.upNext(in: documents).map { Item(document: $0, paceFactor: pace?.factor(for: $0)) },
+            item: Document.upNext(in: documents).map { Item(document: $0) },
             libraryIsEmpty: documents.isEmpty
         )
     }
@@ -34,14 +33,14 @@ extension ContinueReadingSnapshot {
 
 extension ContinueReadingSnapshot.Item {
     @MainActor
-    init(document: Document, paceFactor: Double? = nil) {
+    init(document: Document) {
         self.init(
             id: document.id,
             title: document.title,
             fileName: document.fileName,
             progress: document.progress,
             chapterTitle: ChapterTimeline(document.chapters).chapter(containing: document.currentWordIndex)?.title,
-            remainingMinutes: document.remainingMinutes(paceFactor: paceFactor)
+            remainingMinutes: document.remainingMinutes
         )
     }
 }

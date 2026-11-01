@@ -3,29 +3,27 @@ import Foundation
 /// How much longer a document takes to read under the timing settings than
 /// its word count at plain words per minute: the time smart timing,
 /// compounds, acronyms, punctuation pauses, complexity, and sentence breaks
-/// add, as a factor on the plain estimate.
+/// add, as a factor.
 ///
-/// A document's factor is its reading time in base intervals (one word's
-/// time at plain WPM) divided by its word count, timed word by word with the
+/// A document's factor is its reading time in base intervals (one plain
+/// word's time) divided by its word count, timed word by word with the
 /// engine's own math
 /// (``RSVPEngine/interval(forWordAt:in:complexityScores:timing:baseInterval:)``).
 /// Every term there scales with the base interval, so one factor holds at
-/// every speed. It scales the time left from the resume position and each
-/// chapter's length, taking the rest of a document to read like the whole.
-/// Chapter announcements, a few fixed seconds each, are left out.
+/// every speed. The reader's engine runs its base speed that much faster
+/// than the document's speed (``RSVPEngine/paceFactor``), so the speed
+/// counts every pause: the document reads at its speed overall, and its time
+/// left is its words over its speed. Chapter announcements, a few fixed
+/// seconds each, are left out.
 ///
 /// Working a factor out reads every word, so it runs off the main actor when
-/// a view or the widget first needs it, and is kept by document, word count,
-/// and timing settings: in memory, and in a small file in Caches so it
-/// survives relaunch. Until a document's factor is known for the current
-/// settings, its estimates stay plain.
+/// the book page or the reader first needs it, and is kept by document, word
+/// count, and timing settings: in memory, and in a small file in Caches so
+/// it survives relaunch. Until a document's factor is known for the current
+/// settings, the reader keeps the last one it had, or reads plain.
 @Observable
 final class ReadingPace {
     static let shared = ReadingPace()
-
-    /// Posted on the main actor when the timing settings change or a factor
-    /// is worked out, so `LibraryObserver` can rewrite the widget's snapshot.
-    static let didChange = Notification.Name("ReadingPace.didChange")
 
     nonisolated static let fileURL = URL.cachesDirectory.appending(path: "ReadingPace.plist")
 
@@ -44,8 +42,9 @@ final class ReadingPace {
         let factor: Double
     }
 
-    /// The timing settings estimates follow. Updated once a change to them
-    /// settles, so dragging a slider doesn't start a computation per step.
+    /// The timing settings factors are worked out for. Updated once a change
+    /// to them settles, so dragging a slider doesn't start a computation per
+    /// step.
     private(set) var timing: ReaderSettings.TimingSnapshot
     /// The latest factor worked out for each document, under whichever
     /// settings its key names.
@@ -90,12 +89,6 @@ final class ReadingPace {
         return entry.factor
     }
 
-    /// Minutes to finish `document` from its resume position: at its
-    /// factor once that's known, at plain WPM until then.
-    func remainingMinutes(for document: Document) -> Int {
-        document.remainingMinutes(paceFactor: factor(for: document))
-    }
-
     /// Starts working out `document`'s factor for the current timing
     /// settings, unless it's known or under way. The blobs are read here and
     /// decoded and timed off the main actor. Views call this from
@@ -122,8 +115,7 @@ final class ReadingPace {
         pending[key.documentID] = (key, task)
     }
 
-    /// `document`'s factor, waiting for it to be worked out if need be. For
-    /// answers that can't update later, such as a spoken one.
+    /// `document`'s factor, waiting for it to be worked out if need be.
     func preparedFactor(for document: Document) async -> Double? {
         prepare(document)
         if let task = pending[document.id]?.task {
@@ -147,7 +139,6 @@ final class ReadingPace {
         pending[key.documentID] = nil
         entries[key.documentID] = Entry(key: key, factor: factor)
         save()
-        NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
     /// A document's factor under `timing`: its words' total time in base
@@ -194,13 +185,12 @@ final class ReadingPace {
         }
     }
 
-    /// Reads the timing settings now. A change makes every factor stale, and
-    /// estimates plain until each is worked out again.
+    /// Reads the timing settings now. A change makes every factor stale
+    /// until each is worked out again.
     func reloadTiming() {
         let timing = ReaderSettings.timingSnapshot(from: defaults)
         guard timing != self.timing else { return }
         self.timing = timing
-        NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
     // MARK: - Storage
