@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 /// The names every device agrees on: the iCloud container, the record zone,
-/// the two record types, and their fields.
+/// the record types, and their fields.
 ///
 /// Once the schema is deployed to CloudKit's production environment these are
 /// permanent: fields can be added, never renamed, retyped, or removed.
@@ -23,9 +23,14 @@ nonisolated enum CloudSyncSchema {
     /// well under CloudKit's 1 MB limit (a PDF outline can be huge).
     static let maxInlineChapterBytes = 200_000
 
+    /// The encoding of a reading session record. A newer format only adds
+    /// fields, which an older build reads past.
+    static let sessionFormat: Int64 = 1
+
     enum RecordType {
         static let book = "Book"
         static let readingState = "ReadingState"
+        static let session = "ReadingSession"
     }
 
     enum BookField {
@@ -63,6 +68,24 @@ nonisolated enum CloudSyncSchema {
         /// Every field. `CloudSchemaSeed` sets them all; a new field goes
         /// here too.
         static let all = [currentWordIndex, furthestWordIndex, wordsPerMinute, lastReadDate, modifiedAt]
+    }
+
+    enum SessionField {
+        static let format = "format"
+        /// The document's UUID string. Absent for a session without one.
+        static let documentID = "documentID"
+        static let startedAt = "startedAt"
+        static let endedAt = "endedAt"
+        static let plainWords = "plainWords"
+        static let plainSeconds = "plainSeconds"
+        static let voicedWords = "voicedWords"
+        static let voicedSeconds = "voicedSeconds"
+
+        /// Every field. `CloudSchemaSeed` sets them all; a new field goes
+        /// here too.
+        static let all = [
+            format, documentID, startedAt, endedAt, plainWords, plainSeconds, voicedWords, voicedSeconds,
+        ]
     }
 }
 
@@ -119,7 +142,20 @@ nonisolated enum CloudSchemaSeed {
             modifiedAt: .now
         ).write(to: state)
 
-        return [book, state]
+        let session = CKRecord(
+            recordType: CloudSyncSchema.RecordType.session,
+            recordID: CKRecord.ID(recordName: "seed-session", zoneID: zoneID)
+        )
+        ReadingSessionSnapshot(
+            id: UUID(),
+            documentID: UUID(),
+            startedAt: .now,
+            endedAt: .now,
+            plain: ReadingAmount(words: 1, seconds: 0.5),
+            voiced: ReadingAmount(words: 1, seconds: 0.5)
+        ).write(to: session)
+
+        return [book, state, session]
     }
 }
 #endif
@@ -308,6 +344,73 @@ nonisolated struct BookRecordFields: Equatable {
     /// The title alone, from a record that may carry only changed fields.
     static func title(in record: CKRecord) -> String? {
         record.encryptedValues[CloudSyncSchema.BookField.title] as? String
+    }
+}
+
+/// A reading session's record, `session-<UUID>`. Apart from
+/// ``CloudRecordKey``, whose records belong to a document: a session
+/// outlives its document and never changes once sent.
+nonisolated struct SessionRecordKey: Hashable {
+    static let prefix = "session-"
+
+    let sessionID: UUID
+
+    init(_ sessionID: UUID) {
+        self.sessionID = sessionID
+    }
+
+    init?(recordName: String) {
+        guard recordName.hasPrefix(Self.prefix),
+              let id = UUID(uuidString: String(recordName.dropFirst(Self.prefix.count))) else { return nil }
+        self.init(id)
+    }
+
+    init?(recordID: CKRecord.ID) {
+        guard recordID.zoneID.zoneName == CloudSyncSchema.zoneName else { return nil }
+        self.init(recordName: recordID.recordName)
+    }
+
+    var recordName: String { Self.prefix + sessionID.uuidString }
+
+    var recordID: CKRecord.ID {
+        CKRecord.ID(recordName: recordName, zoneID: CloudSyncSchema.zoneID)
+    }
+}
+
+nonisolated extension ReadingSessionSnapshot {
+    /// Writes every field, encrypted like the rest of the library.
+    func write(to record: CKRecord) {
+        typealias Field = CloudSyncSchema.SessionField
+        record.encryptedValues[Field.format] = CloudSyncSchema.sessionFormat
+        if let documentID {
+            record.encryptedValues[Field.documentID] = documentID.uuidString
+        }
+        record.encryptedValues[Field.startedAt] = startedAt
+        record.encryptedValues[Field.endedAt] = endedAt
+        record.encryptedValues[Field.plainWords] = Int64(plain.words)
+        record.encryptedValues[Field.plainSeconds] = plain.seconds
+        record.encryptedValues[Field.voicedWords] = Int64(voiced.words)
+        record.encryptedValues[Field.voicedSeconds] = voiced.seconds
+    }
+
+    init?(record: CKRecord) {
+        typealias Field = CloudSyncSchema.SessionField
+        guard record.recordType == CloudSyncSchema.RecordType.session,
+              let key = SessionRecordKey(recordName: record.recordID.recordName),
+              let startedAt = record.encryptedValues[Field.startedAt] as? Date,
+              let endedAt = record.encryptedValues[Field.endedAt] as? Date,
+              let plainWords = record.encryptedValues[Field.plainWords] as? Int64,
+              let plainSeconds = record.encryptedValues[Field.plainSeconds] as? Double,
+              let voicedWords = record.encryptedValues[Field.voicedWords] as? Int64,
+              let voicedSeconds = record.encryptedValues[Field.voicedSeconds] as? Double else { return nil }
+        self.init(
+            id: key.sessionID,
+            documentID: (record.encryptedValues[Field.documentID] as? String).flatMap(UUID.init(uuidString:)),
+            startedAt: startedAt,
+            endedAt: endedAt,
+            plain: ReadingAmount(words: Int(plainWords), seconds: plainSeconds),
+            voiced: ReadingAmount(words: Int(voicedWords), seconds: voicedSeconds)
+        )
     }
 }
 

@@ -52,6 +52,12 @@ final class RSVPEngine {
     /// isn't observed.
     @ObservationIgnored private var playedWordCount = 0
 
+    /// Words playback has moved past, counted as ``takePlayedWordCount()``
+    /// counts them, since the engine was made. It only grows, so reading
+    /// statistics measure a stretch of playing by its difference
+    /// (``ReadingSessionTracker``).
+    @ObservationIgnored private(set) var playedWordTotal = 0
+
     /// The furthest word playback has moved to since the words were loaded,
     /// so the document's furthest-read marker keeps what was read before
     /// going back (scrubbing, "Read Again"). Seeking and scrubbing don't move
@@ -487,7 +493,7 @@ final class RSVPEngine {
                 return
             }
             currentIndex += 1
-            playedWordCount += 1
+            countPlayedWords(1)
             furthestPlayedIndex = max(furthestPlayedIndex, currentIndex)
             if !announceChapterIfNeeded() { scheduleNextWord(anchor: previousDeadline) }
         } else {
@@ -538,9 +544,14 @@ final class RSVPEngine {
         if let chapter = chapterAnnouncement {
             countedFrom = max(countedFrom, readingStart(ofChapterAt: chapter.wordIndex))
         }
-        playedWordCount += max(0, index - countedFrom)
+        countPlayedWords(max(0, index - countedFrom))
         currentIndex = index
         furthestPlayedIndex = max(furthestPlayedIndex, index)
+    }
+
+    private func countPlayedWords(_ count: Int) {
+        playedWordCount += count
+        playedWordTotal += count
     }
 
     private func breaksAfterCurrentWord() -> Bool {

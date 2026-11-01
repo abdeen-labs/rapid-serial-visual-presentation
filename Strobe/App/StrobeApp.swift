@@ -26,6 +26,9 @@ struct StrobeApp: App {
         let container = Self.sharedBootstrap.container
         shareInboxImporter = container.map { ShareInboxImporter(container: $0) }
         if let container {
+            if ReadingSession.finishAbandoned(in: container.mainContext) {
+                try? container.mainContext.save()
+            }
             LibraryObserver.start(container: container)
             // Before sync starts, which reads the choice.
             SyncConsent.storeLaunchChoice(hasDocuments: {
@@ -80,7 +83,7 @@ struct StrobeApp: App {
     }
 
     private static func bootstrapModelContainer() -> BootstrapResult {
-        let schema = Schema([Document.self])
+        let schema = Schema([Document.self, ReadingSession.self])
         var diagnostics: [String] = []
 
         func append(_ message: String) {

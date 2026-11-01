@@ -92,6 +92,9 @@ final class LibrarySync: CKSyncEngineDelegate {
     @ObservationIgnored private var heldRecords: [String: Date] = [:]
     /// Whether books skipped by an earlier fetch are being fetched again.
     @ObservationIgnored private var isRefetchingSkippedBooks = false
+    /// Whether the session records an earlier build passed over are being
+    /// fetched (`catchUpOnSessions`).
+    @ObservationIgnored private var isCatchingUpOnSessions = false
     /// Books whose refetched records `applyRefetchedBooks` is taking in.
     @ObservationIgnored private var refetchingBooks: Set<UUID> = []
     @ObservationIgnored private var lastFetchRequest = Date.distantPast
@@ -288,6 +291,8 @@ final class LibrarySync: CKSyncEngineDelegate {
         let engine = CKSyncEngine(configuration)
         if ledger.engineState == nil {
             engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudSyncSchema.zoneID))])
+            // Fetching from the start, this build takes in every session.
+            ledger.hasFetchedSessions = true
         }
         self.cloudContainer = cloudContainer
         self.engine = engine
@@ -344,6 +349,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         if engine === self.engine {
             finishFirstFetchIfNeeded()
             refetchSkippedBooks(on: engine)
+            catchUpOnSessions(on: engine)
         }
     }
 
@@ -505,7 +511,36 @@ final class LibrarySync: CKSyncEngineDelegate {
         }
         watchingEngine = engine
         enqueue(saves: plan.saves, deletes: plan.deletes, on: engine)
+        enqueueSessions(in: context, on: engine)
         saveLedger()
+    }
+
+    /// Queues the finished reading sessions iCloud doesn't have. Each is
+    /// sent once and never changes after; one still under way waits for
+    /// its reader to finish it.
+    private func enqueueSessions(in context: ModelContext, on engine: CKSyncEngine) {
+        var descriptor = FetchDescriptor<ReadingSession>(predicate: #Predicate { $0.isFinished })
+        descriptor.propertiesToFetch = [\.id]
+        guard let finished = try? context.fetch(descriptor) else { return }
+        let ids = ledger.sessionsToUpload(finished: finished.map(\.id), now: .now)
+        enqueueSessionSaves(ids.map(SessionRecordKey.init), on: engine)
+    }
+
+    private func enqueueSessionSaves(_ keys: [SessionRecordKey], on engine: CKSyncEngine) {
+        // As for documents, nothing is sent before the account is confirmed.
+        guard accountConfirmedEngine === engine, !keys.isEmpty else { return }
+        let now = Date.now
+        var pending = Set(engine.state.pendingRecordZoneChanges.compactMap(Self.identity(of:)))
+        let additions = keys
+            .filter { (heldRecords[$0.recordName] ?? .distantPast) <= now }
+            .map { CKSyncEngine.PendingRecordZoneChange.saveRecord($0.recordID) }
+            .filter { change in
+                guard let identity = Self.identity(of: change) else { return false }
+                return pending.insert(identity).inserted
+            }
+        if !additions.isEmpty {
+            engine.state.add(pendingRecordZoneChanges: additions)
+        }
     }
 
     private func snapshot(of document: Document, now: Date) -> LocalDocumentSnapshot {
@@ -552,7 +587,11 @@ final class LibrarySync: CKSyncEngineDelegate {
 
     /// Holds a record back until `date`, then reconciles so it's sent again.
     private func hold(_ key: CloudRecordKey, until date: Date) {
-        heldRecords[key.recordName] = date
+        hold(recordName: key.recordName, until: date)
+    }
+
+    private func hold(recordName: String, until date: Date) {
+        heldRecords[recordName] = date
         if date < .distantFuture {
             reconcile(after: date)
         }
@@ -832,6 +871,9 @@ final class LibrarySync: CKSyncEngineDelegate {
     /// The record to send for a queued save, built from the document as it
     /// is now.
     private func record(toSave recordID: CKRecord.ID, engine: CKSyncEngine) async -> (record: CKRecord, assetBytes: Int)? {
+        if let session = SessionRecordKey(recordID: recordID) {
+            return sessionRecord(session, engine: engine)
+        }
         guard let key = CloudRecordKey(recordID: recordID),
               let document = localDocument(key.documentID),
               let entry = ledger.entry(for: key.documentID), entry.removal == nil else {
@@ -1095,8 +1137,16 @@ final class LibrarySync: CKSyncEngineDelegate {
         var hitQuota = false
         var quotaRefusedUpdate = false
         var savedFirstUpload = false
+        var sessionRetries: [SessionRecordKey] = []
 
         for record in sent.savedRecords {
+            // A session isn't a first upload: it's small, and accepting one
+            // shows nothing about room for books.
+            if let session = SessionRecordKey(recordID: record.recordID) {
+                ledger.confirmSession(session.sessionID)
+                heldRecords[session.recordName] = nil
+                continue
+            }
             guard let key = CloudRecordKey(recordID: record.recordID) else { continue }
             // Checked before it's confirmed: a book iCloud didn't have, or
             // its first reading state.
@@ -1119,6 +1169,35 @@ final class LibrarySync: CKSyncEngineDelegate {
         }
 
         for failure in sent.failedRecordSaves {
+            if let session = SessionRecordKey(recordID: failure.record.recordID) {
+                switch failure.error.code {
+                case .serverRecordChanged:
+                    // iCloud has it already, as when the reply to an
+                    // earlier send was lost. Sessions never change.
+                    ledger.confirmSession(session.sessionID)
+                case .zoneNotFound:
+                    needsZone = true
+                    sessionRetries.append(session)
+                case .unknownItem:
+                    sessionRetries.append(session)
+                case .userDeletedZone:
+                    turnOffAfterICloudDeletion()
+                    return
+                case .quotaExceeded:
+                    hitQuota = true
+                case .networkFailure, .networkUnavailable, .zoneBusy, .serviceUnavailable,
+                     .notAuthenticated, .operationCancelled, .requestRateLimited:
+                    break
+                case .limitExceeded, .invalidArguments, .permissionFailure, .serverRejectedRequest,
+                     .incompatibleVersion, .badContainer, .missingEntitlement, .constraintViolation:
+                    logger.error("iCloud rejected \(session.recordName, privacy: .public): \(failure.error.localizedDescription, privacy: .public)")
+                    hold(recordName: session.recordName, until: .distantFuture)
+                default:
+                    logger.error("Couldn't save \(session.recordName, privacy: .public): \(failure.error.localizedDescription, privacy: .public)")
+                    hold(recordName: session.recordName, until: now.addingTimeInterval(600))
+                }
+                continue
+            }
             guard let key = CloudRecordKey(recordID: failure.record.recordID) else { continue }
             switch failure.error.code {
             case .serverRecordChanged:
@@ -1204,6 +1283,7 @@ final class LibrarySync: CKSyncEngineDelegate {
             resend.append(key)
         }
         enqueue(saves: resend, deletes: [], on: engine)
+        enqueueSessionSaves(sessionRetries, on: engine)
         saveLedger()
     }
 
@@ -1271,9 +1351,123 @@ final class LibrarySync: CKSyncEngineDelegate {
             guard await applyRemoteChangeSave(books: chunk, states: chunkStates, deletions: [], engine: engine, context: context) else { return }
         }
         let otherStates = states.filter { !appliedStates.contains($0.recordID) }
-        if !otherStates.isEmpty || !deletions.isEmpty {
-            await applyRemoteChangeSave(books: [], states: otherStates, deletions: deletions, engine: engine, context: context)
+        let documentDeletions = deletions.filter { CloudRecordKey(recordID: $0) != nil }
+        if !otherStates.isEmpty || !documentDeletions.isEmpty {
+            guard await applyRemoteChangeSave(
+                books: [], states: otherStates, deletions: documentDeletions, engine: engine, context: context
+            ) else { return }
         }
+        let sessions = records.compactMap(ReadingSessionSnapshot.init(record:))
+        let deletedSessions = deletions.compactMap(SessionRecordKey.init(recordID:))
+        if !sessions.isEmpty || !deletedSessions.isEmpty {
+            applyRemoteSessions(sessions, deleted: deletedSessions, engine: engine, context: context)
+        }
+    }
+
+    /// Takes in reading sessions from iCloud, each stored once, finished.
+    /// One this device already has (its own, or one taken in before) is
+    /// only marked as in iCloud. A session deleted from iCloud stays here,
+    /// and the device that has it sends it again. Returns false when they
+    /// weren't taken in: sync stopped or started over meanwhile, or the save
+    /// failed (everything is fetched again).
+    @discardableResult
+    private func applyRemoteSessions(
+        _ sessions: [ReadingSessionSnapshot],
+        deleted: [SessionRecordKey],
+        engine: CKSyncEngine,
+        context: ModelContext
+    ) -> Bool {
+        guard engine === self.engine else { return false }
+        let ids = sessions.map(\.id)
+        let stored: [ReadingSession]
+        do {
+            stored = try context.fetch(FetchDescriptor<ReadingSession>(predicate: #Predicate { ids.contains($0.id) }))
+        } catch {
+            logger.error("Couldn't read reading sessions to merge synced ones: \(error.localizedDescription, privacy: .public)")
+            refetchEverything()
+            return false
+        }
+        var known = Set(stored.map(\.id))
+        for session in sessions where known.insert(session.id).inserted {
+            context.insert(ReadingSession(session, isFinished: true))
+        }
+        guard saveContext(context) else {
+            refetchEverything()
+            return false
+        }
+        for session in sessions {
+            ledger.confirmSession(session.id)
+        }
+        for key in deleted {
+            ledger.forgetSession(key.sessionID)
+        }
+        saveLedger()
+        if !deleted.isEmpty {
+            scheduleReconcile()
+        }
+        return true
+    }
+
+    /// A finished session's record, or nil, dropping the save, when the
+    /// session is gone or iCloud storage is full. A later reconcile queues
+    /// it again.
+    private func sessionRecord(_ key: SessionRecordKey, engine: CKSyncEngine) -> (record: CKRecord, assetBytes: Int)? {
+        let id = key.sessionID
+        var descriptor = FetchDescriptor<ReadingSession>(predicate: #Predicate { $0.id == id && $0.isFinished })
+        descriptor.fetchLimit = 1
+        guard !ledger.isStoragePaused(now: .now),
+              let session = try? container?.mainContext.fetch(descriptor).first else {
+            engine.state.remove(pendingRecordZoneChanges: [.saveRecord(key.recordID)])
+            return nil
+        }
+        let record = CKRecord(recordType: CloudSyncSchema.RecordType.session, recordID: key.recordID)
+        session.snapshot.write(to: record)
+        return (record, 0)
+    }
+
+    /// Fetches every session record once, for a ledger whose engine fetched
+    /// under a build without sessions: its change token has moved past
+    /// theirs. Asks for the session fields alone, so books come without
+    /// their words. A failure tries again after the next fetch.
+    private func catchUpOnSessions(on engine: CKSyncEngine) {
+        guard !isCatchingUpOnSessions, ledger.hasFetchedSessions != true,
+              ledger.hasFetchedEverything, accountConfirmedEngine === engine else { return }
+        isCatchingUpOnSessions = true
+        let database = engine.database
+        Task.detached { [weak self] in
+            var sessions: [ReadingSessionSnapshot] = []
+            var token: CKServerChangeToken?
+            var succeeded = true
+            do {
+                while true {
+                    let changes = try await database.recordZoneChanges(
+                        inZoneWith: CloudSyncSchema.zoneID,
+                        since: token,
+                        desiredKeys: CloudSyncSchema.SessionField.all
+                    )
+                    for result in changes.modificationResultsByID.values {
+                        if case .success(let modification) = result,
+                           let session = ReadingSessionSnapshot(record: modification.record) {
+                            sessions.append(session)
+                        }
+                    }
+                    token = changes.changeToken
+                    guard changes.moreComing else { break }
+                }
+            } catch {
+                await self?.log("Fetching reading sessions failed", error)
+                succeeded = false
+            }
+            await self?.finishCatchingUpOnSessions(sessions, succeeded: succeeded, engine: engine)
+        }
+    }
+
+    private func finishCatchingUpOnSessions(_ sessions: [ReadingSessionSnapshot], succeeded: Bool, engine: CKSyncEngine) {
+        isCatchingUpOnSessions = false
+        guard succeeded, engine === self.engine, let context = container?.mainContext,
+              applyRemoteSessions(sessions, deleted: [], engine: engine, context: context) else { return }
+        ledger.hasFetchedSessions = true
+        saveLedger()
     }
 
     /// The bytes of words, scores, and chapters a book record brings, when

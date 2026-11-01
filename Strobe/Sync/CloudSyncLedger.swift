@@ -121,6 +121,15 @@ nonisolated struct CloudSyncLedger: Codable {
     /// the one whose ledger is set aside. This ledger only runs again once
     /// the user turns sync back on, which agrees to sync with that account.
     var accountAskedAbout: String?
+    /// The reading sessions iCloud has, this device's and the others'.
+    /// Sessions never change once sent, so which ones iCloud has is all sync
+    /// needs to know. Optional, so a ledger saved by an earlier build still
+    /// loads.
+    var sessionsInICloud: Set<UUID>?
+    /// Whether this ledger's fetches have taken in every session record. An
+    /// engine that fetched under a build without sessions has moved past
+    /// theirs, so they're fetched once on their own (`LibrarySync`).
+    var hasFetchedSessions: Bool?
 
     /// A book from iCloud this device couldn't take in. The engine's change
     /// token has moved past its record, so it's fetched again directly.
@@ -644,6 +653,7 @@ nonisolated struct CloudSyncLedger: Codable {
         // Their records went with the zone; the devices that have them
         // upload them again.
         skippedBooks = nil
+        sessionsInICloud = nil
     }
 
     /// When iCloud first saved the record whose system fields these are.
@@ -846,6 +856,33 @@ nonisolated extension CloudSyncLedger {
         } else {
             storagePause?.holdsUpdates = false
         }
+    }
+
+    // MARK: Reading sessions
+
+    /// The sessions to send, from the finished ones here: those iCloud
+    /// doesn't have. None until a full fetch has shown what iCloud has, which
+    /// marks the ones it has; none while iCloud storage is full.
+    func sessionsToUpload(finished ids: [UUID], now: Date) -> [UUID] {
+        guard hasFetchedEverything, !isStoragePaused(now: now) else { return [] }
+        let inICloud = sessionsInICloud ?? []
+        return ids.filter { !inICloud.contains($0) }
+    }
+
+    func isSessionInICloud(_ id: UUID) -> Bool {
+        sessionsInICloud?.contains(id) ?? false
+    }
+
+    /// Records a session iCloud has: sent from here, or fetched.
+    mutating func confirmSession(_ id: UUID) {
+        if sessionsInICloud == nil { sessionsInICloud = [] }
+        sessionsInICloud?.insert(id)
+    }
+
+    /// Records a session iCloud no longer has. The device that has it sends
+    /// it again; sync never deletes one.
+    mutating func forgetSession(_ id: UUID) {
+        sessionsInICloud?.remove(id)
     }
 
     /// Whether the library has a document whose book iCloud doesn't have.

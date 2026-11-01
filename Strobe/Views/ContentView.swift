@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var importError: ImportQueue.Report?
     @State private var persistenceError: String?
     @State private var showSettings = false
+    @State private var showStatistics = false
     @State private var showWelcome = false
     @State private var showTextInput = false
     @State private var documentPendingDeletion: Document?
@@ -89,8 +90,8 @@ struct ContentView: View {
     /// Whether a waiting sync question can be asked: after the welcome, on
     /// the library itself (never over the reader), with nothing else up.
     private var canAskAboutSync: Bool {
-        hasSeenTutorial && !showWelcome && !showSettings && !showTextInput && !isImporting
-            && !isReviewingDuplicates && navigationPath.isEmpty
+        hasSeenTutorial && !showWelcome && !showSettings && !showStatistics && !showTextInput
+            && !isImporting && !isReviewingDuplicates && navigationPath.isEmpty
             && documentPendingRename == nil && documentPendingDeletion == nil
             && importError == nil && persistenceError == nil
     }
@@ -149,6 +150,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isReviewingDuplicates) {
             LikelyDuplicatesReview()
+        }
+        .sheet(isPresented: $showStatistics) {
+            StatisticsView()
         }
         .fileImporter(
             isPresented: $isImporting,
@@ -347,16 +351,20 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var libraryToolbar: some ToolbarContent {
         #if os(iOS)
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItemGroup(placement: .topBarLeading) {
             Button {
                 showSettings = true
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
             .tint(.primary)
+            statisticsButton
         }
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
+            #if os(macOS)
+            statisticsButton
+            #endif
             if !documents.isEmpty {
                 sortMenu
                     .tint(.primary)
@@ -364,6 +372,15 @@ struct ContentView: View {
             addMenu
                 .tint(.primary)
         }
+    }
+
+    private var statisticsButton: some View {
+        Button {
+            showStatistics = true
+        } label: {
+            Label("Statistics", systemImage: "chart.bar")
+        }
+        .tint(.primary)
     }
 
     private var sortMenu: some View {
@@ -435,6 +452,7 @@ struct ContentView: View {
                 return
             }
             showSettings = false
+            showStatistics = false
             navigationPath = NavigationPath([ReaderRoute(document: document)])
         }
     }

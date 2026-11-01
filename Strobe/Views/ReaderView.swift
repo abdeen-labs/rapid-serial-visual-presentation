@@ -11,7 +11,7 @@ import AppKit
 /// Gesture-driven: hold to play (or tap to toggle, when `holdToReadEnabled`
 /// is off or a voice reads aloud), release to pause, swipe to scrub, two
 /// fingers to read hands-free (see ``ReaderTouch``). Paused, a top bar holds
-/// Back, the title, Read Aloud, View Text, and the speed slider, and a
+/// Back, the title, Read Aloud, View Text, Settings, and the speed slider, and a
 /// bottom panel holds chapter navigation (when chapters exist) and the
 /// progress bar with the time left; both fade out while reading. With
 /// reading aloud on, a voice paces the words (``ReadAloudController``).
@@ -71,8 +71,15 @@ struct ReaderView: View {
     @State private var wpmSliderValue: Double
     @State private var isAdjustingWPM = false
     @State private var showCompletion = false
+    /// Times reading for the Statistics sheet.
+    @State private var sessionRecorder: ReadingSessionRecorder
     @State private var showChapterPicker = false
     @State private var showPassage = false
+    #if os(iOS)
+    @State private var showSettings = false
+    #elseif os(macOS)
+    @Environment(\.openSettings) private var openSettings
+    #endif
     @State private var persistenceError: String?
     @State private var isLoaded = false
     @State private var isBackfillingComplexity = false
@@ -133,6 +140,7 @@ struct ReaderView: View {
             complexitySlowDownIntensity: timing.complexitySlowDownIntensity
         ))
         self._wpmSliderValue = State(initialValue: Double(document.wordsPerMinute))
+        self._sessionRecorder = State(initialValue: ReadingSessionRecorder(documentID: document.id))
     }
 
     /// Decodes the word and complexity blobs (off-main) and hands them to the
@@ -358,7 +366,7 @@ struct ReaderView: View {
         .marksDocumentOpen(document.id)
         .keepsVoiceModelLoaded(holdsVoiceModel)
         // Re-assert keyboard focus whenever any overlay (passage view, chapter
-        // picker, save-error or read-aloud alert) closes, so Space/arrow
+        // picker, settings, save-error or read-aloud alert) closes, so Space/arrow
         // shortcuts keep working on macOS. One derived flag covers all
         // presentations — adding a new one only requires extending
         // `isPresentingOverlay`.
@@ -367,6 +375,7 @@ struct ReaderView: View {
         }
         .onDisappear {
             persistState(pauseEngine: true, touchLastReadDate: true)
+            sessionRecorder.finish(playedWords: engine.playedWordTotal, in: modelContext)
             readAloud.readerDidClose()
             AppRouter.shared.readerDidDisappear(documentID: document.id)
         }
@@ -396,6 +405,14 @@ struct ReaderView: View {
             if !isActive && isTouching { touchWasCancelled() }
         }
         .onChange(of: engine.isPlaying) { wasPlaying, isNowPlaying in
+            // First, while the voice that paced this playing is still the
+            // one set: a pause can hand over to a voice that just got ready.
+            sessionRecorder.playbackChanged(
+                isPlaying: isNowPlaying,
+                playedWords: engine.playedWordTotal,
+                isVoiced: readAloud.isReadingAloud,
+                in: modelContext
+            )
             // Any pause ends hands-free reading: a tap, Space, the scene
             // going inactive, the last word. A voice that got ready while
             // the words played reads from here, and one chosen that
@@ -476,6 +493,11 @@ struct ReaderView: View {
                 .marksDocumentOpen(document.id)
                 .keepsVoiceModelLoaded(holdsVoiceModel)
         }
+        // A sheet leaves the reader open beneath it, and the settings
+        // observers above pass each change to the engine as it's made.
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
         #elseif os(macOS)
         .sheet(isPresented: $showPassage) {
             PassageView(document: document, engine: engine)
@@ -534,7 +556,10 @@ struct ReaderView: View {
     /// True while any focus-stealing presentation is up. Used to restore
     /// keyboard focus when the last one closes.
     private var isPresentingOverlay: Bool {
-        showPassage || showChapterPicker || persistenceError != nil || readAloudPrompt != nil
+        #if os(iOS)
+        if showSettings { return true }
+        #endif
+        return showPassage || showChapterPicker || persistenceError != nil || readAloudPrompt != nil
     }
 
     // MARK: - Unified gesture
@@ -760,7 +785,7 @@ struct ReaderView: View {
 
     // MARK: - Top bar
 
-    /// Back, the title, Read Aloud, and View Text, laid out like a
+    /// Back, the title, Read Aloud, View Text, and Settings, laid out like a
     /// navigation bar, over the speed. Speed sits up here rather than in
     /// the bottom panel so the two bars stay about the same height: the
     /// word's line has to clear both on the smallest screens, and the marks
@@ -808,6 +833,15 @@ struct ReaderView: View {
                 showPassage = true
             }
             .accessibilityHint("Shows the full passage with your current word highlighted")
+
+            // On macOS, the standard Settings window.
+            ReaderGlassButton(systemImage: "gearshape", accessibilityLabel: "Settings") {
+                #if os(iOS)
+                showSettings = true
+                #elseif os(macOS)
+                openSettings()
+                #endif
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -1070,6 +1104,8 @@ struct ReaderView: View {
             cancelPlayIntent()
             engine.pause()
         }
+        // Stored with the position, so a session survives the app closing.
+        sessionRecorder.save(isPlaying: engine.isPlaying, playedWords: engine.playedWordTotal, in: modelContext)
         let engineIndex = engine.currentIndex
         document.recordPosition(
             currentIndex: engineIndex == savedEngineIndex ? document.currentWordIndex : engineIndex,

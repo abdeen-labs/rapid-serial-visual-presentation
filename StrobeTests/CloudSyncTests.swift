@@ -74,6 +74,22 @@ struct CloudSyncTests {
         #expect(CloudRecordKey(recordID: CKRecord.ID(recordName: "book-\(UUID().uuidString)", zoneID: otherZone)) == nil)
     }
 
+    /// A session's record name never reads as a document's, or the other
+    /// way round, so document sync passes sessions by.
+    @Test func sessionRecordNamesStayApartFromDocuments() {
+        let id = UUID()
+        let key = SessionRecordKey(id)
+        #expect(key.recordName == "session-\(id.uuidString)")
+        #expect(SessionRecordKey(recordName: key.recordName) == key)
+        #expect(SessionRecordKey(recordID: key.recordID) == key)
+        #expect(CloudRecordKey(recordID: key.recordID) == nil)
+        #expect(SessionRecordKey(recordID: CloudRecordKey(.book, id).recordID) == nil)
+        #expect(SessionRecordKey(recordID: CloudRecordKey(.state, id).recordID) == nil)
+        #expect(SessionRecordKey(recordName: "session-not-a-uuid") == nil)
+        let otherZone = CKRecordZone.ID(zoneName: "Other", ownerName: CKCurrentUserDefaultName)
+        #expect(SessionRecordKey(recordID: CKRecord.ID(recordName: key.recordName, zoneID: otherZone)) == nil)
+    }
+
     // MARK: - Merging positions
 
     @Test func laterResumePointWinsAndFurthestNeverDrops() {
@@ -522,6 +538,85 @@ struct CloudSyncTests {
         #expect(!ledger.isInICloud(unsent))
     }
 
+    // MARK: - Reading sessions
+
+    private func session(documentID: UUID? = UUID()) -> ReadingSessionSnapshot {
+        ReadingSessionSnapshot(
+            id: UUID(),
+            documentID: documentID,
+            startedAt: t0,
+            endedAt: minutes(25),
+            plain: ReadingAmount(words: 4321, seconds: 900.5),
+            voiced: ReadingAmount(words: 1234, seconds: 450.25)
+        )
+    }
+
+    @Test func readingSessionRoundTripsThroughARecord() throws {
+        for original in [session(), session(documentID: nil)] {
+            let record = CKRecord(recordType: CloudSyncSchema.RecordType.session, recordID: SessionRecordKey(original.id).recordID)
+            original.write(to: record)
+            #expect(ReadingSessionSnapshot(record: record) == original)
+            // Every field is encrypted.
+            #expect(Set(record.encryptedValues.allKeys()) == Self.keys(of: record))
+            #expect(Self.keys(of: record).isSubset(of: CloudSyncSchema.SessionField.all))
+        }
+    }
+
+    @Test func otherRecordsAreNotSessions() {
+        let original = session()
+        let book = CKRecord(recordType: CloudSyncSchema.RecordType.book, recordID: SessionRecordKey(original.id).recordID)
+        original.write(to: book)
+        #expect(ReadingSessionSnapshot(record: book) == nil)
+        let misnamed = CKRecord(recordType: CloudSyncSchema.RecordType.session, recordID: CloudRecordKey(.book, original.id).recordID)
+        original.write(to: misnamed)
+        #expect(ReadingSessionSnapshot(record: misnamed) == nil)
+    }
+
+    /// Only finished sessions iCloud doesn't have go, and only once a full
+    /// fetch has shown which it has, and not while its storage is full.
+    @Test func sessionsUploadOnceEachAfterAFullFetch() {
+        let sent = UUID(), unsent = UUID()
+        var ledger = CloudSyncLedger()
+        #expect(ledger.sessionsToUpload(finished: [sent, unsent], now: t0).isEmpty)
+
+        ledger.hasFetchedEverything = true
+        #expect(ledger.sessionsToUpload(finished: [sent, unsent], now: t0) == [sent, unsent])
+        ledger.confirmSession(sent)
+        #expect(ledger.isSessionInICloud(sent))
+        #expect(ledger.sessionsToUpload(finished: [sent, unsent], now: t0) == [unsent])
+
+        ledger.storagePause = CloudSyncLedger.StoragePause(until: minutes(15), failures: 1, holdsUpdates: false)
+        #expect(ledger.sessionsToUpload(finished: [unsent], now: t0).isEmpty)
+        #expect(ledger.sessionsToUpload(finished: [unsent], now: minutes(16)) == [unsent])
+    }
+
+    /// A session iCloud lost goes again, and so does every one after iCloud
+    /// lost the zone.
+    @Test func sessionsICloudLostAreSentAgain() {
+        let first = UUID(), second = UUID()
+        var ledger = CloudSyncLedger()
+        ledger.hasFetchedEverything = true
+        ledger.confirmSession(first)
+        ledger.confirmSession(second)
+        ledger.forgetSession(first)
+        #expect(ledger.sessionsToUpload(finished: [first, second], now: t0) == [first])
+
+        ledger.confirmSession(first)
+        ledger.forgetServerRecords()
+        #expect(ledger.sessionsToUpload(finished: [first, second], now: t0) == [first, second])
+    }
+
+    /// Starting over forgets which sessions iCloud has; the next full fetch
+    /// marks them again.
+    @Test func startingOverForgetsSessions() {
+        var ledger = CloudSyncLedger()
+        ledger.confirmSession(UUID())
+        ledger.hasFetchedSessions = true
+        let fresh = ledger.startingOver()
+        #expect(fresh.sessionsInICloud == nil)
+        #expect(fresh.hasFetchedSessions == nil)
+    }
+
     // MARK: - Schema
 
     private static func keys(of record: CKRecord) -> Set<String> {
@@ -534,13 +629,16 @@ struct CloudSyncTests {
         let records = try CloudSchemaSeed.records(assetDirectory: directory)
         let book = try #require(records.first { $0.recordType == CloudSyncSchema.RecordType.book })
         let state = try #require(records.first { $0.recordType == CloudSyncSchema.RecordType.readingState })
+        let session = try #require(records.first { $0.recordType == CloudSyncSchema.RecordType.session })
 
         #expect(Self.keys(of: book) == Set(CloudSyncSchema.BookField.all))
         #expect(Self.keys(of: state) == Set(CloudSyncSchema.StateField.all))
+        #expect(Self.keys(of: session) == Set(CloudSyncSchema.SessionField.all))
         #expect(BookRecordFields(record: book) != nil)
         #expect(StampedReadingPosition(record: state) != nil)
         // Never mistaken for library records.
         #expect(records.allSatisfy { CloudRecordKey(recordID: $0.recordID) == nil })
+        #expect(records.allSatisfy { SessionRecordKey(recordID: $0.recordID) == nil })
     }
 
     @Test func syncWritesOnlyFieldsTheSchemaDeclares() {
@@ -572,6 +670,23 @@ struct CloudSyncTests {
         #expect(loaded.entries == ledger.entries)
         #expect(loaded.pendingDeletes == ledger.pendingDeletes)
         #expect(loaded.hasFetchedEverything)
+        // From before sessions synced: none known, and not fetched yet.
+        #expect(loaded.sessionsInICloud == nil)
+        #expect(loaded.hasFetchedSessions == nil)
+    }
+
+    @Test func sessionsSurviveTheLedgerFile() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "CloudSyncTests-\(UUID().uuidString)/Ledger.plist")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let id = UUID()
+        var ledger = CloudSyncLedger()
+        ledger.confirmSession(id)
+        ledger.hasFetchedSessions = true
+        try ledger.save(to: url)
+
+        let loaded = CloudSyncLedger.load(from: url)
+        #expect(loaded.isSessionInICloud(id))
+        #expect(loaded.hasFetchedSessions == true)
     }
 
     @Test func unreadableLedgerStartsEmptyAndIsSetAside() throws {
