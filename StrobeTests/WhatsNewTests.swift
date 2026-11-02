@@ -241,4 +241,9 @@ struct WhatsNewTests {
         let readAloud = try #require(WhatsNew.releases.flatMap(\.items).first { $0.title == "Read Aloud" })
         #expect(readAloud.requirement == .readAloud)
     }
+
+    @Test func listeningInTheBackgroundOnlyShowsWhereItRuns() throws {
+        let background = try #require(WhatsNew.releases.flatMap(\.items).first { $0.title == "Listen in the Background" })
+        #expect(background.requirement == .readAloudInBackground)
+    }
 }

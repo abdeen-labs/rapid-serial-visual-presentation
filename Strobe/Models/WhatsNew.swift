@@ -24,6 +24,9 @@ nonisolated enum WhatsNew {
     enum Requirement: Hashable, Sendable {
         /// Reading aloud runs here (`KokoroVoiceModel.isSupported`).
         case readAloud
+        /// Reading aloud runs here and goes on in the background
+        /// (`KokoroVoiceModel.rendersInBackground`).
+        case readAloudInBackground
     }
 
     struct Release: Hashable, Sendable, Identifiable {
@@ -45,6 +48,45 @@ nonisolated enum WhatsNew {
 
     /// Every release, newest first.
     static let releases: [Release] = [
+        Release(version: "3.4", items: [
+            Item(
+                symbol: "chart.bar",
+                title: "Reading Statistics",
+                detail: "Strobe now keeps track of your reading: time and words read, your average session, and your real speed, by week, month, year, or all time. Open it from the library's toolbar."
+            ),
+            Item(
+                symbol: "gauge.with.dots.needle.67percent",
+                title: "Speed Counts Every Pause",
+                detail: "The speed you set is now how fast you read overall. Pauses and slowdowns take their time from the other words instead of adding to it."
+            ),
+            Item(
+                symbol: "headphones",
+                title: "Listen in the Background",
+                detail: "The voice reads on while you use other apps or lock the screen, and plays and pauses from Now Playing and your headphones.",
+                requirement: .readAloudInBackground
+            ),
+            Item(
+                symbol: "gearshape",
+                title: "Settings While Reading",
+                detail: "The reader has its own Settings button, so you can change the timing and the look without leaving the book."
+            ),
+            Item(
+                symbol: "slider.horizontal.3",
+                title: "Simple and Complex Words",
+                detail: "Complexity Timing has a slider for each: how much simple words speed up, and how much complex ones slow down."
+            ),
+            Item(
+                symbol: "rectangle.split.3x1",
+                title: "Previous and Next Words",
+                detail: "Show the word before, the word after, or both, and choose how clearly they show while words play."
+            ),
+            Item(
+                symbol: "waveform",
+                title: "Steadier Voice",
+                detail: "A passage the voice can't read now shows its words in silence, and the voice picks up after it.",
+                requirement: .readAloud
+            ),
+        ]),
         Release(version: "3.3", items: [
             Item(
                 symbol: "speaker.wave.2",
@@ -56,11 +98,6 @@ nonisolated enum WhatsNew {
                 symbol: "captions.bubble",
                 title: "Pop Words In",
                 detail: "Each word springs in as it appears, like video captions. Turn it on in Settings, under Reading."
-            ),
-            Item(
-                symbol: "gauge.with.dots.needle.67percent",
-                title: "Speed Counts Every Pause",
-                detail: "The speed you set is now how fast you read overall. Pauses and slowdowns take their time from the other words instead of adding to it."
             ),
         ]),
     ]

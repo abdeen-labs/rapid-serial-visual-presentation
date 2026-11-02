@@ -92,6 +92,7 @@ extension WhatsNew.Requirement {
     nonisolated var isMetOnThisDevice: Bool {
         switch self {
         case .readAloud: KokoroVoiceModel.isSupported
+        case .readAloudInBackground: KokoroVoiceModel.isSupported && KokoroVoiceModel.rendersInBackground
         }
     }
 }
