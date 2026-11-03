@@ -58,12 +58,16 @@ jobs:
 
           # Prefer an iPhone on the NEWEST installed iOS runtime — the devices
           # dict is keyed by runtime identifier with no ordering guarantee.
+          # Skip the iPhone Duo: its first boot stalled xcodebuild for 6–8
+          # minutes and pushed the job past its timeout.
           devices = simctl("devices", "available")["devices"]
           udid = None
           for key in sorted((k for k in devices if ".iOS-" in k), key=ios_version, reverse=True):
               iphones = [
                   d for d in devices[key]
-                  if d.get("isAvailable") and d["name"].startswith("iPhone")
+                  if d.get("isAvailable")
+                  and d["name"].startswith("iPhone")
+                  and "Duo" not in d["name"]
               ]
               if iphones:
                   udid = iphones[0]["udid"]
@@ -74,6 +78,7 @@ jobs:
                   t["identifier"]
                   for t in simctl("devicetypes")["devicetypes"]
                   if t["identifier"].rsplit(".", 1)[-1].startswith("iPhone")
+                  and "Duo" not in t["identifier"]
               ]
               runtimes = sorted(
                   (r["identifier"]
