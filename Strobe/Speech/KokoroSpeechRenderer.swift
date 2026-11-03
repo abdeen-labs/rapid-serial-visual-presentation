@@ -8,7 +8,8 @@ import os
 /// model's own timing.
 ///
 /// Each word of a script is phonemized on its own, from the part of the
-/// script's text that reads it (``KokoroSpokenText``), and the words'
+/// script's text that reads it (``KokoroSpokenText``), `the` and `a` take
+/// their readings from the word after them, and the words'
 /// phonemes are joined into one line (``KokoroPhonemeLine``) that the model
 /// renders in one go, so it phrases the chunk as a whole. The model
 /// predicts how many frames each phoneme lasts, which places every word in
@@ -62,18 +63,23 @@ final class KokoroSpeechRenderer: SpeechRendering {
             wordPhonemes = try await titlePhonemes(script.text, with: manager)
         } else {
             var phonemes: [String] = []
+            var spoken: [String] = []
             phonemes.reserveCapacity(script.words.count)
+            spoken.reserveCapacity(script.words.count)
             let utf16 = script.text.utf16
             for range in script.wordRanges {
                 guard !range.isEmpty else {
                     phonemes.append("")
+                    spoken.append("")
                     continue
                 }
                 let start = utf16.index(utf16.startIndex, offsetBy: range.lowerBound)
                 let end = utf16.index(start, offsetBy: range.count)
-                phonemes.append(try await self.phonemes(for: String(script.text[start..<end]), with: manager))
+                let text = String(script.text[start..<end])
+                spoken.append(text)
+                phonemes.append(try await self.phonemes(for: text, with: manager))
             }
-            wordPhonemes = phonemes
+            wordPhonemes = KokoroSpokenText.readingArticles(in: phonemes, spoken: spoken)
         }
 
         var samples: [Float] = []
@@ -157,7 +163,8 @@ final class KokoroSpeechRenderer: SpeechRendering {
         guard !text.isEmpty else { return [] }
         let output = try await phonemize(text, with: manager) ?? ""
         let cleaned = KokoroPhonemeLine.cleaned(output) { encodable.contains($0) }
-        return cleaned.split(separator: " ").map(String.init)
+        let groups = cleaned.split(separator: " ").map(String.init)
+        return KokoroSpokenText.readingArticles(inTitle: title, groups: groups)
     }
 
     /// The phonemizer's output for `text`: empty when it finds nothing to

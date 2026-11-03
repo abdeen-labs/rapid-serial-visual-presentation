@@ -151,6 +151,10 @@ nonisolated struct KokoroPhonemeLine: Equatable, Sendable {
 ///   time is read with `PM`, whose letter names then become those of `AM`,
 ///   so that `12:00` reads as "twelve" rather than "twelve o'clock". The
 ///   other designators (`BCE`, `BC`, `CE`, `PM`) read right as they are.
+/// - The lexicon reads `the` as "thee" and `a` as the letter's name
+///   wherever they are, so once the words are phonemized, they read as
+///   "thuh" and "uh" unless the next word starts with a vowel sound
+///   (``readingArticles(in:spoken:)``).
 nonisolated enum KokoroSpokenText {
 
     /// How to phonemize a word's spoken text.
@@ -265,6 +269,112 @@ nonisolated enum KokoroSpokenText {
             guard letters == letters.uppercased() else { return nil }
         }
         return (letters.uppercased(), after)
+    }
+
+    // MARK: - Articles
+
+    /// How the lexicon says `the`, and `thee`: "thee".
+    static let strongThe = "ði"
+    /// `the` before a consonant sound: "thuh".
+    static let weakThe = "ðə"
+    /// How the lexicon says `a` and `A`: the letter's name.
+    static let strongA: Set<String> = ["A", "ˈA"]
+    /// `a` before a consonant sound, as Kokoro was taught it: "uh".
+    static let weakA = "ɐ"
+
+    /// The phonemes Kokoro's vowels start with.
+    static let vowels = Set("AIOQWYaeiouæɐɑɒɔəɚɛɜɪʊʌᵻ".unicodeScalars)
+
+    /// The words' phonemes, `wordPhonemes`, with `the` and `a` read as
+    /// "thuh" and "uh" unless the next word heard starts with a vowel sound
+    /// ("thee apple", "thee hour", "thee FBI", but "thuh university").
+    ///
+    /// - A `the` with no next word to tell reads as "thuh"; an `a` keeps the
+    ///   letter's name.
+    /// - A word with marks after it keeps the lexicon's reading: `the,` (for
+    ///   a dash), `"a"` named as a word, `A.`
+    /// - A capital `A` is the letter (`vitamin A`) unless it starts a
+    ///   sentence (the first word heard, after a sentence end, or after an
+    ///   opening quote) or the next word starts with a capital (`A New Hope`).
+    /// - Parameter spoken: Each word's text in the script, as phonemized.
+    static func readingArticles(in wordPhonemes: [String], spoken: [String]) -> [String] {
+        readingArticles(in: wordPhonemes) { position, nextStartsWithVowel in
+            let word = spoken[position].drop { !$0.isLetter }
+            if word.lowercased() == "the", nextStartsWithVowel != true {
+                return weakened(wordPhonemes[position], from: [strongThe], to: weakThe)
+            }
+            if word == "a" || (word == "A" && isArticle(capitalAAt: position, spoken: spoken, wordPhonemes: wordPhonemes)),
+               nextStartsWithVowel == false {
+                return weakened(wordPhonemes[position], from: strongA, to: weakA)
+            }
+            return nil
+        }
+    }
+
+    /// A chapter title's phonemes, `groups`, as ``readingArticles(in:spoken:)``
+    /// reads its words. The title has no words of its own, so an article is
+    /// a group that reads as one, with no marks after it, and every `A` in a
+    /// title is one. A title with the word `thee`, which reads as `the` does,
+    /// keeps "thee".
+    static func readingArticles(inTitle title: String, groups: [String]) -> [String] {
+        let hasThee = title.split { !$0.isLetter }.contains { $0.lowercased() == "thee" }
+        return readingArticles(in: groups) { position, nextStartsWithVowel in
+            if !hasThee, nextStartsWithVowel != true,
+               let weak = weakened(groups[position], from: [strongThe], to: weakThe) {
+                return weak
+            }
+            return nextStartsWithVowel == false ? weakened(groups[position], from: strongA, to: weakA) : nil
+        }
+    }
+
+    /// `phonemes` with each word's weak form, as `weakForm` gives it for the
+    /// word's position and whether the next word heard starts with a vowel:
+    /// nil when it has no sound, or there's none.
+    private static func readingArticles(
+        in phonemes: [String],
+        weakForm: (_ position: Int, _ nextStartsWithVowel: Bool?) -> String?
+    ) -> [String] {
+        var result = phonemes
+        var nextStartsWithVowel: Bool?
+        for position in phonemes.indices.reversed() where !phonemes[position].isEmpty {
+            if let weak = weakForm(position, nextStartsWithVowel) {
+                result[position] = weak
+            }
+            nextStartsWithVowel = startsWithVowel(phonemes[position])
+        }
+        return result
+    }
+
+    /// Whether the capital `A` at `position` is the article rather than the
+    /// letter, as ``readingArticles(in:spoken:)`` tells.
+    private static func isArticle(capitalAAt position: Int, spoken: [String], wordPhonemes: [String]) -> Bool {
+        let isHeard = { (other: Int) in !wordPhonemes[other].isEmpty }
+        if spoken[position].contains(where: { "\"“‘'«".contains($0) }) {
+            return true
+        }
+        if let next = spoken.indices[(position + 1)...].first(where: isHeard),
+           spoken[next].first(where: \.isLetter)?.isUppercase == true {
+            return true
+        }
+        guard let previous = spoken.indices[..<position].last(where: isHeard) else { return true }
+        return PunctuationMarks.marks(in: spoken[previous]).contains(.sentenceEnd)
+    }
+
+    /// `phonemes` with `weak` in place of a strong form after any marks
+    /// before it; nil when they aren't one of `strong`.
+    private static func weakened(_ phonemes: String, from strong: Set<String>, to weak: String) -> String? {
+        let scalars = phonemes.unicodeScalars
+        let sound = scalars.firstIndex(where: KokoroWordTiming.isSounding) ?? scalars.endIndex
+        guard strong.contains(String(scalars[sound...])) else { return nil }
+        return String(scalars[..<sound]) + weak
+    }
+
+    /// Whether a word's first sound is a vowel; nil when it has no sound.
+    static func startsWithVowel(_ phonemes: String) -> Bool? {
+        let stressAndLength: Set<Unicode.Scalar> = ["ˈ", "ˌ", "ː"]
+        return phonemes.unicodeScalars
+            .first { KokoroWordTiming.isSounding($0) && !stressAndLength.contains($0) }
+            .map { vowels.contains($0) }
     }
 }
 

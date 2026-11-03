@@ -356,4 +356,109 @@ struct KokoroWordTimingTests {
         #expect(plan.phonemes(fromPhonemizerOutput: "sˈɛvənti nˈIn") == "ˌAdˈi sˈɛvənti nˈIn")
         #expect(plan.phonemes(fromPhonemizerOutput: "") == "ˌAdˈi")
     }
+
+    // MARK: - Articles
+
+    private func readingArticles(_ words: [(spoken: String, phonemes: String)]) -> [String] {
+        KokoroSpokenText.readingArticles(in: words.map(\.phonemes), spoken: words.map(\.spoken))
+    }
+
+    @Test func theBeforeAConsonantSoundIsThuh() {
+        #expect(readingArticles([("the", "ði"), ("box", "bˈɑks")]) == ["ðə", "bˈɑks"])
+        #expect(readingArticles([("The", "ði"), ("university", "jˌunəvˈɜɹsəɾi")]) == ["ðə", "jˌunəvˈɜɹsəɾi"])
+        #expect(readingArticles([("THE", "ði"), ("one", "wˈʌn")]) == ["ðə", "wˈʌn"])
+    }
+
+    @Test func theBeforeAVowelSoundIsThee() {
+        #expect(readingArticles([("the", "ði"), ("apple", "ˈæpᵊl")]) == ["ði", "ˈæpᵊl"])
+        #expect(readingArticles([("the", "ði"), ("hour", "ˈWəɹ")]) == ["ði", "ˈWəɹ"])
+        #expect(readingArticles([("the", "ði"), ("idea", "Idˈiə")]) == ["ði", "Idˈiə"])
+        #expect(readingArticles([("the", "ði"), ("FBI", "ˌɛfbˌiˈI")]) == ["ði", "ˌɛfbˌiˈI"])
+    }
+
+    @Test func theLooksAtTheNextWordHeard() {
+        #expect(readingArticles([("the", "ði"), ("“box", "“bˈɑks")]) == ["ðə", "“bˈɑks"])
+        #expect(readingArticles([("the", "ði"), ("", ""), ("end", "ˈɛnd")]) == ["ði", "", "ˈɛnd"])
+        #expect(readingArticles([("of", "ʌv"), ("the", "ði"), ("the", "ði"), ("end", "ˈɛnd")]) == ["ʌv", "ðə", "ði", "ˈɛnd"])
+    }
+
+    @Test func theWithMarksBeforeItReadsByTheNextWord() {
+        #expect(readingArticles([("“The", "“ði"), ("box", "bˈɑks")]) == ["“ðə", "bˈɑks"])
+        #expect(readingArticles([("(the", "(ði"), ("end", "ˈɛnd")]) == ["(ði", "ˈɛnd"])
+    }
+
+    @Test func theWithMarksAfterItIsThee() {
+        #expect(readingArticles([("the,", "ði,"), ("box", "bˈɑks")]) == ["ði,", "bˈɑks"])
+        #expect(readingArticles([("“the”", "“ði”"), ("box", "bˈɑks")]) == ["“ði”", "bˈɑks"])
+    }
+
+    @Test func theWithNothingAfterItIsThuh() {
+        #expect(readingArticles([("the", "ði")]) == ["ðə"])
+        #expect(readingArticles([("the", "ði"), ("…", "…")]) == ["ðə", "…"])
+    }
+
+    @Test func theeStaysThee() {
+        #expect(readingArticles([("thee", "ði"), ("box", "bˈɑks")]) == ["ði", "bˈɑks"])
+        #expect(readingArticles([("then", "ðˈɛn"), ("box", "bˈɑks")]) == ["ðˈɛn", "bˈɑks"])
+    }
+
+    @Test func aBeforeAConsonantSoundIsUh() {
+        #expect(readingArticles([("is", "ˈɪz"), ("a", "A"), ("box", "bˈɑks")]) == ["ˈɪz", "ɐ", "bˈɑks"])
+        #expect(readingArticles([("a", "A"), ("university", "jˌunəvˈɜɹsəɾi")]) == ["ɐ", "jˌunəvˈɜɹsəɾi"])
+        #expect(readingArticles([("a", "A"), ("“box", "“bˈɑks")]) == ["ɐ", "“bˈɑks"])
+        #expect(readingArticles([("(a", "(A"), ("box", "bˈɑks")]) == ["(ɐ", "bˈɑks"])
+    }
+
+    @Test func aBeforeAVowelSoundOrNothingKeepsItsName() {
+        #expect(readingArticles([("a", "A"), ("apple", "ˈæpᵊl")]) == ["A", "ˈæpᵊl"])
+        #expect(readingArticles([("a", "A"), ("and", "ænd"), ("b", "bˈi")]) == ["A", "ænd", "bˈi"])
+        #expect(readingArticles([("the", "ði"), ("letter", "lˈɛɾəɹ"), ("a", "A")]) == ["ðə", "lˈɛɾəɹ", "A"])
+        #expect(readingArticles([("a", "A"), ("…", "…")]) == ["A", "…"])
+    }
+
+    @Test func aWithMarksAfterItKeepsItsName() {
+        #expect(readingArticles([("a,", "A,"), ("box", "bˈɑks")]) == ["A,", "bˈɑks"])
+        #expect(readingArticles([("A.", "ˈA."), ("Smith", "smˈɪθ")]) == ["ˈA.", "smˈɪθ"])
+    }
+
+    @Test func capitalAStartingASentenceIsUh() {
+        #expect(readingArticles([("A", "ˈA"), ("dog", "dˈɔɡ")]) == ["ɐ", "dˈɔɡ"])
+        #expect(readingArticles([("ran.", "ɹˈæn."), ("A", "ˈA"), ("dog", "dˈɔɡ")]) == ["ɹˈæn.", "ɐ", "dˈɔɡ"])
+        #expect(readingArticles([("said,", "sˈɛd,"), ("“A", "“ˈA"), ("storm", "stˈɔɹm")]) == ["sˈɛd,", "“ɐ", "stˈɔɹm"])
+        #expect(readingArticles([("", ""), ("A", "ˈA"), ("dog", "dˈɔɡ")]) == ["", "ɐ", "dˈɔɡ"])
+    }
+
+    @Test func capitalABeforeACapitalIsUh() {
+        #expect(readingArticles([("in", "ɪn"), ("A", "ˈA"), ("New", "nˈu"), ("Hope", "hˈOp")]) == ["ɪn", "ɐ", "nˈu", "hˈOp"])
+        #expect(readingArticles([("IS", "ˈɪz"), ("A", "ˈA"), ("TEST", "tˈɛst")]) == ["ˈɪz", "ɐ", "tˈɛst"])
+    }
+
+    @Test func capitalAInASentenceIsTheLetter() {
+        #expect(readingArticles([("vitamin", "vˈItəmɪn"), ("A", "ˈA"), ("deficiency", "dəfˈɪʃənsi")])
+            == ["vˈItəmɪn", "ˈA", "dəfˈɪʃənsi"])
+        #expect(readingArticles([("the", "ði"), ("A", "ˈA"), ("team", "tˈim")]) == ["ði", "ˈA", "tˈim"])
+    }
+
+    @Test func titleReadsArticlesByTheNextGroup() {
+        let groups = ["ði", "bˈY", "hˌu", "ði", "ˈɔɹəʤᵊn"]
+        #expect(KokoroSpokenText.readingArticles(inTitle: "The Boy Who The Origin", groups: groups) == ["ðə", "bˈY", "hˌu", "ði", "ˈɔɹəʤᵊn"])
+        #expect(KokoroSpokenText.readingArticles(inTitle: "“The Box", groups: ["“ði", "bˈɑks"]) == ["“ðə", "bˈɑks"])
+        #expect(KokoroSpokenText.readingArticles(inTitle: "The, Box", groups: ["ði,", "bˈɑks"]) == ["ði,", "bˈɑks"])
+        #expect(KokoroSpokenText.readingArticles(inTitle: "A Tale", groups: ["ˈA", "tˈAl"]) == ["ɐ", "tˈAl"])
+        #expect(KokoroSpokenText.readingArticles(inTitle: "Appendix A", groups: ["əpˈɛndɪks", "ˈA"]) == ["əpˈɛndɪks", "ˈA"])
+    }
+
+    @Test func titleWithTheeKeepsThee() {
+        let groups = ["ʌv", "ði", "ˈI", "sˈɪŋ"]
+        #expect(KokoroSpokenText.readingArticles(inTitle: "Of Thee I Sing", groups: groups) == groups)
+        #expect(KokoroSpokenText.readingArticles(inTitle: "Thee A Box", groups: ["ði", "A", "bˈɑks"]) == ["ði", "ɐ", "bˈɑks"])
+    }
+
+    @Test func findsTheFirstSound() {
+        #expect(KokoroSpokenText.startsWithVowel("ˈæpᵊl") == true)
+        #expect(KokoroSpokenText.startsWithVowel("“ˌʌs") == true)
+        #expect(KokoroSpokenText.startsWithVowel("jˈuzəɹ") == false)
+        #expect(KokoroSpokenText.startsWithVowel("…") == nil)
+        #expect(KokoroSpokenText.startsWithVowel("") == nil)
+    }
 }
