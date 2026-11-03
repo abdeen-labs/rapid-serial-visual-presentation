@@ -140,15 +140,11 @@ Scripts/         Build-phase scripts
 
 1. Open `Strobe.xcodeproj` in Xcode 27. Xcode fetches the one package, FluidAudio, pinned to 0.17.7.
 2. Pick the **Strobe** scheme and an iPhone, iPad, or Mac to run on.
-3. To run on your own device or Mac, choose your team under **Signing & Capabilities** for the **Strobe**, **StrobeShare**, and **StrobeWidgetExtension** targets. Bundle IDs, App Group IDs, and iCloud containers are unique across teams, so also give the targets bundle IDs of your own, replace `group.com.abdeen.strobe` in `SharedContainer.swift` and the three `.entitlements` files, and replace `iCloud.com.abdeen.strobe` in `CloudRecords.swift` and `Strobe.entitlements`.
+3. To run on your own device or Mac, choose your team under **Signing & Capabilities** for the **Strobe**, **StrobeShare**, and **StrobeWidgetExtension** targets. App Group IDs and iCloud containers are unique across teams, so also replace `group.com.abdeen.strobe` in `SharedContainer.swift` and the three `.entitlements` files, and replace `iCloud.com.abdeen.strobe` in `CloudRecords.swift` and `Strobe.entitlements`.
 
 There are no API keys to add. The voice isn't in the repo: the app downloads it from Hugging Face when you first turn on Read Aloud. The iPhone Duo's fold needs the iOS 27.1 SDK; with the iOS 27.0 SDK, everything else builds.
 
-To run the tests, press <kbd>⌘U</kbd> with the **Strobe** scheme on an iPhone simulator or your Mac, or from the command line:
-
-```bash
-xcodebuild test -project Strobe.xcodeproj -scheme Strobe -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
-```
+To run the tests, press <kbd>⌘U</kbd> with the **Strobe** scheme on an iPhone simulator or your Mac.
 
 ## Contributing
 
