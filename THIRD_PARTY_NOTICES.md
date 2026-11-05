@@ -2,7 +2,7 @@
 
 Strobe's own code is licensed under the [Apache License, Version 2.0](LICENSE).
 
-The app credits everything it ships or downloads in **Settings ▸ About ▸ Acknowledgements**, with each project's copyright lines and full license: the Kokoro voice model and its files, FluidAudio and the projects it compiles in, and the fonts. The list lives in [`Strobe/Models/Acknowledgements.swift`](Strobe/Models/Acknowledgements.swift), and the license texts in [`Strobe/Models/AcknowledgementLicenses.swift`](Strobe/Models/AcknowledgementLicenses.swift).
+The app credits everything it ships or downloads in **Settings ▸ About ▸ Acknowledgements**, with each project's copyright lines and full license: the Kokoro voice model and its files, FluidAudio and the projects it compiles in, Swift Markdown and its cmark-gfm parser (including Houdini, buffer utilities, and utf8proc), and the fonts. The list lives in [`Strobe/Models/Acknowledgements.swift`](Strobe/Models/Acknowledgements.swift), and the license texts in [`Strobe/Models/AcknowledgementLicenses.swift`](Strobe/Models/AcknowledgementLicenses.swift).
 
 ## Fonts in this repository
 

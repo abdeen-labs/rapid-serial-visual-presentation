@@ -6,6 +6,7 @@ enum DocumentSourceType: String, Equatable {
     case pdf
     case epub
     case plainText
+    case markdown
     case unknown
 }
 
@@ -21,11 +22,12 @@ struct ImportResult {
 /// Routes document files to the appropriate extractor based on file type.
 ///
 /// Serves as the entry point for the import pipeline: detects the source type,
-/// delegates to ``PDFTextExtractor`` or ``EPUBTextExtractor``, and resolves
+/// delegates to format-specific extractors, and resolves
 /// the display title from metadata or the filename.
 enum DocumentImportPipeline {
     /// The content types the app can import via the file picker.
     nonisolated static let supportedContentTypes: [UTType] = [.pdf, .epub, .plainText]
+        + ["md", "markdown"].compactMap { UTType(filenameExtension: $0) }
 
     /// Upper bound on plain-text file size — beyond any real book; bounds
     /// memory against a pathological multi-gigabyte file.
@@ -37,6 +39,7 @@ enum DocumentImportPipeline {
         if let detectedContentType {
             if detectedContentType.conforms(to: .pdf) { return .pdf }
             if detectedContentType.conforms(to: .epub) { return .epub }
+            if isMarkdown(url) { return .markdown }
             if detectedContentType.conforms(to: .plainText) { return .plainText }
         }
 
@@ -46,11 +49,17 @@ enum DocumentImportPipeline {
             return .pdf
         case "epub":
             return .epub
-        case "txt", "text", "md", "markdown":
+        case "md", "markdown":
+            return .markdown
+        case "txt", "text":
             return .plainText
         default:
             return .unknown
         }
+    }
+
+    nonisolated private static func isMarkdown(_ url: URL) -> Bool {
+        ["md", "markdown"].contains(url.pathExtension.lowercased())
     }
 
     /// Returns the document's metadata title if available, otherwise cleans up the filename.
@@ -129,6 +138,15 @@ enum DocumentImportPipeline {
             let complexity = WordComplexityAnalyzer.analyzeComplexity(words)
             try Task.checkCancellation()
             return ImportResult(words: words, complexityScores: complexity, chapters: [], sourceType: .plainText, title: nil)
+        case .markdown:
+            // Structural Markdown parsing is independent of boilerplate cleaning.
+            // TextCleaner's page-number/table rules would discard valid content.
+            let text = try readPlainText(from: url)
+            let words = try MarkdownTextExtractor.extractWords(from: text)
+            try Task.checkCancellation()
+            let complexity = WordComplexityAnalyzer.analyzeComplexity(words)
+            try Task.checkCancellation()
+            return ImportResult(words: words, complexityScores: complexity, chapters: [], sourceType: .markdown, title: nil)
         case .unknown:
             throw DocumentImportError.unsupportedFileType
         }

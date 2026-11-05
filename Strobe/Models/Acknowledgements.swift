@@ -55,7 +55,7 @@ nonisolated enum Acknowledgements {
         var id: String { title }
     }
 
-    static let groups: [Group] = [voice, fluidAudio, textNormalization, fonts]
+    static let groups: [Group] = [voice, fluidAudio, markdown, textNormalization, fonts]
 
     // MARK: - Reading aloud
 
@@ -144,6 +144,57 @@ nonisolated enum Acknowledgements {
         ]
     )
 
+    // MARK: - Markdown importing
+
+    static let markdown = Group(
+        title: "Markdown",
+        summary: "Parses Markdown documents into readable text on this device.",
+        credits: [
+            Credit(
+                name: "Swift Markdown",
+                author: "Apple Inc. and the Swift project authors",
+                license: .apache2,
+                url: URL(string: "https://github.com/swiftlang/swift-markdown")!,
+                notices: ["Copyright (c) 2021-2023 Apple Inc. and the Swift project authors"],
+                note: "Runtime Library Exception to the Apache 2.0 License: "
+                    + "As an exception, if you use this Software to compile your source code and "
+                    + "portions of this Software are embedded into the binary product as a result, "
+                    + "you may redistribute such product without providing attribution as would "
+                    + "otherwise be required by Sections 4(a), 4(b) and 4(d) of the License."
+            ),
+            Credit(
+                name: "cmark-gfm",
+                author: "John MacFarlane and contributors",
+                license: .bsd2,
+                url: URL(string: "https://github.com/swiftlang/swift-cmark")!,
+                notices: ["Copyright (c) 2014, John MacFarlane", "All rights reserved."]
+            ),
+            Credit(
+                name: "Houdini",
+                author: "Vicent Martí",
+                license: .mit,
+                url: URL(string: "https://github.com/vmg/houdini")!,
+                notices: ["Copyright (C) 2012 Vicent Martí"],
+                note: "HTML escaping and entity decoding included in cmark-gfm."
+            ),
+            Credit(
+                name: "cmark buffer utilities",
+                author: "Github, Inc.",
+                license: .mit,
+                url: URL(string: "https://github.com/swiftlang/swift-cmark")!,
+                notices: ["(C) 2012 Github, Inc."]
+            ),
+            Credit(
+                name: "utf8proc",
+                author: "Public Software Group e. V.",
+                license: .mit,
+                url: URL(string: "https://github.com/JuliaStrings/utf8proc")!,
+                notices: ["(C) 2009 Public Software Group e. V., Berlin, Germany."],
+                note: "Unicode processing included in cmark-gfm."
+            ),
+        ]
+    )
+
     // MARK: - Text normalization
 
     static let textNormalization = Group(
@@ -165,7 +216,8 @@ nonisolated enum Acknowledgements {
                     Copyright (c) NVIDIA CORPORATION & AFFILIATES.
                     Licensed under the Apache License, Version 2.0.
 
-                    In addition, when built with the optional `fst-engine` feature, this product includes and redistributes artifacts derived from NVIDIA NeMo Text Processing (Apache-2.0, pinned commit 1f1263579fe57ba7ed783cad3dddee710fcc5064):
+                    In addition, when built with the optional `fst-engine` feature, this product includes and redistributes \
+                    artifacts derived from NVIDIA NeMo Text Processing (Apache-2.0, pinned commit 1f1263579fe57ba7ed783cad3dddee710fcc5064):
 
                     * the compiled weighted-FST grammars under `grammars/` (exported from NeMo's Pynini source), and
                     * the text-normalization test fixtures under `tests/fixtures/` (copied from, or regenerated as the deterministic output of, NeMo's `data_text_normalization` test cases).

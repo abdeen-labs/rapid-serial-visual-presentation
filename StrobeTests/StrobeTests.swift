@@ -24,7 +24,7 @@ struct StrobeTests {
         #expect(DocumentImportPipeline.resolveSourceType(for: URL(fileURLWithPath: "/tmp/book.pdf")) == .pdf)
         #expect(DocumentImportPipeline.resolveSourceType(for: URL(fileURLWithPath: "/tmp/book.epub")) == .epub)
         #expect(DocumentImportPipeline.resolveSourceType(for: URL(fileURLWithPath: "/tmp/book.txt")) == .plainText)
-        #expect(DocumentImportPipeline.resolveSourceType(for: URL(fileURLWithPath: "/tmp/notes.md")) == .plainText)
+        #expect(DocumentImportPipeline.resolveSourceType(for: URL(fileURLWithPath: "/tmp/notes.md")) == .markdown)
         #expect(DocumentImportPipeline.resolveSourceType(for: URL(fileURLWithPath: "/tmp/book.bin")) == .unknown)
     }
 
