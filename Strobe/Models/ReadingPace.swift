@@ -8,7 +8,7 @@ import Foundation
 /// A document's factor is its reading time in base intervals (one plain
 /// word's time) divided by its word count, timed word by word with the
 /// engine's own math
-/// (``RSVPEngine/interval(forWordAt:in:complexityScores:timing:baseInterval:)``).
+/// (``RSVPEngine/interval(forWordAt:in:complexityScores:blockEnds:timing:baseInterval:)``).
 /// Every term there scales with the base interval, so one factor holds at
 /// every speed. The reader's engine runs its base speed that much faster
 /// than the document's speed (``RSVPEngine/paceFactor``), so the speed
@@ -27,8 +27,9 @@ final class ReadingPace {
 
     nonisolated static let fileURL = URL.cachesDirectory.appending(path: "ReadingPace.plist")
 
-    /// What a factor holds for. A document's words never change, so its word
-    /// count stands for its content; new complexity scores, the one later
+    /// What a factor holds for. A document's words and block ends never
+    /// change (block ends are set at import, or arrive with the book from
+    /// iCloud), so its word count stands for its content; new complexity scores, the one later
     /// change that matters, drop its factor through ``forget(_:)``. The
     /// speed isn't part of it: the factor is the same at every speed.
     nonisolated struct Key: Hashable, Codable, Sendable {
@@ -103,12 +104,16 @@ final class ReadingPace {
         let legacyWords = wordsBlob?.isEmpty == false ? [] : document.words
         // Scores only matter with complexity timing on.
         let complexityBlob = key.timing.complexityTimingEnabled ? document.complexityBlob : nil
+        let blockEndsBlob = document.blockEndsBlob
         let chapters = document.chapters
         let task = Task {
             let factor = await Task.detached(priority: .utility) {
                 let words = wordsBlob.flatMap { $0.isEmpty ? nil : WordStorage.decode($0) } ?? legacyWords
                 let scores = complexityBlob.flatMap { $0.isEmpty ? nil : ComplexityStorage.decode($0) }
-                return ReadingPace.factor(words: words, complexityScores: scores, chapters: chapters, timing: key.timing)
+                return ReadingPace.factor(
+                    words: words, complexityScores: scores, blockEnds: BlockEndStorage.decode(blockEndsBlob),
+                    chapters: chapters, timing: key.timing
+                )
             }.value
             self.finish(key, factor: factor)
         }
@@ -147,11 +152,14 @@ final class ReadingPace {
     nonisolated static func factor(
         words: [String],
         complexityScores: [Float]?,
+        blockEnds: BlockEnds = .none,
         chapters: [Chapter],
         timing: ReaderSettings.TimingSnapshot
     ) -> Double {
         guard !words.isEmpty else { return 1 }
         let chapterStarts = RSVPEngine.announcedChapters(chapters, wordCount: words.count)
+        // As the engine loads them.
+        let blockEnds = blockEnds.droppingEnds(beforeChapterStarts: chapterStarts.keys)
         let breakIntervals = RSVPEngine.sentenceBreakInterval(timing: timing, baseInterval: 1)
         var total = 0.0
         for index in words.indices {
@@ -159,12 +167,14 @@ final class ReadingPace {
                 forWordAt: index,
                 in: words,
                 complexityScores: complexityScores,
+                blockEnds: blockEnds,
                 timing: timing,
                 baseInterval: 1
             )
             if RSVPEngine.breaksAfterWord(
                 at: index,
                 in: words,
+                blockEnds: blockEnds,
                 nextWordStartsChapter: chapterStarts[index + 1] != nil,
                 timing: timing
             ) {

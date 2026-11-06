@@ -5,7 +5,8 @@ import Foundation
 struct EPUBContent {
     var text = ""
     var anchors: [String: Int] = [:]
-    var headings: [(title: String, offset: Int)] = []
+    /// Each heading's text, where it starts, and its level (1 for `<h1>`).
+    var headings: [(title: String, offset: Int, level: Int)] = []
     /// Where block elements (paragraphs, headings, list items) open or close,
     /// ascending. Words on either side of one never join as a number unit.
     var blockBreaks: [Int] = []
@@ -70,7 +71,9 @@ struct EPUBContent {
             if closing, let active = heading, active.tag == name {
                 let title = (result.text as NSString).substring(from: active.offset)
                     .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-                if !title.isEmpty { result.headings.append((title, active.offset)) }
+                if !title.isEmpty {
+                    result.headings.append((title, active.offset, Int(active.tag.dropFirst()) ?? 1))
+                }
                 heading = nil
             }
             if blockTags.contains(name) {
@@ -102,6 +105,17 @@ struct EPUBContent {
     nonisolated func appendWords(
         cleanedText: String, into words: inout [String], carry: inout String?
     ) -> [Int: Int] {
+        var blockEnds = BlockEnds()
+        return appendWords(cleanedText: cleanedText, into: &words, carry: &carry, blockEnds: &blockEnds)
+    }
+
+    /// ``appendWords(cleanedText:into:carry:)``, also marking in `blockEnds`
+    /// the last word before each block break that has words after it. A
+    /// hyphenated fragment waiting across a break marks its block's end only
+    /// if it doesn't merge with the next word.
+    nonisolated func appendWords(
+        cleanedText: String, into words: inout [String], carry: inout String?, blockEnds: inout BlockEnds
+    ) -> [Int: Int] {
         let offsets = Set([0] + Array(anchors.values) + headings.map(\.offset)).sorted()
         var marker = 0
         var blockBreak = 0
@@ -117,7 +131,15 @@ struct EPUBContent {
                 startsBlock = true
                 blockBreak += 1
             }
+            if startsBlock, pending == nil, !words.isEmpty {
+                blockEnds.mark(words.count - 1, as: .block)
+            }
             Tokenizer.appendTokenizedText(token, into: &words, carry: &carry, startsBlock: startsBlock)
+            // A fragment that waited across the break without merging came
+            // out as a word of its own, the last of the block before.
+            if startsBlock, let pending, words.count > before, words[before] == pending {
+                blockEnds.mark(before, as: .block)
+            }
             guard token.unicodeScalars.contains(where: {
                 $0.properties.isAlphabetic || $0.properties.numericType != nil
             }) else { return }

@@ -108,7 +108,9 @@ final class ShareInboxImporter {
     /// kept as shared, like New Text.
     nonisolated static func readableText(of item: SharedItem, cleaningLevel: TextCleaningLevel) -> String {
         switch item.source {
-        case .webPage: TextCleaner.cleanText(item.text, level: cleaningLevel)
+        // Line ends first: the cleaner splits at every newline character, so
+        // a `\r\n` would leave a blank line, which ends a paragraph.
+        case .webPage: TextCleaner.cleanText(PlainTextParagraphs.normalizingLineEnds(item.text), level: cleaningLevel)
         case .text: item.text
         }
     }

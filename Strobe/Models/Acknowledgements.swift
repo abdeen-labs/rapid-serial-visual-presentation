@@ -3,12 +3,13 @@ import Foundation
 /// The open-source work Strobe ships or downloads, credited in Settings ▸
 /// About ▸ Acknowledgements with each license's full text.
 ///
-/// Strobe ships FluidAudio (and what it compiles in) and the fonts, and
-/// downloads the voice when reading aloud is set up. Adding a package, a
-/// font, or a downloaded model means adding its credit here. A project's
-/// copyright lines are copied as it states them; most models and some
-/// libraries state none. A project offered under several licenses is
-/// credited under the one Strobe takes, Apache 2.0 where it's offered.
+/// Strobe ships FluidAudio and cmark-gfm (each with what it compiles in)
+/// and the fonts, and downloads the voice when reading aloud is set up.
+/// Adding a package, a font, or a downloaded model means adding its credit
+/// here. A project's copyright lines are copied as it states them; most
+/// models and some libraries state none. A project offered under several
+/// licenses is credited under the one Strobe takes, Apache 2.0 where it's
+/// offered.
 nonisolated enum Acknowledgements {
 
     struct Credit: Identifiable, Hashable, Sendable {
@@ -55,7 +56,7 @@ nonisolated enum Acknowledgements {
         var id: String { title }
     }
 
-    static let groups: [Group] = [voice, fluidAudio, textNormalization, fonts]
+    static let groups: [Group] = [voice, fluidAudio, textNormalization, markdown, fonts]
 
     // MARK: - Reading aloud
 
@@ -261,6 +262,47 @@ nonisolated enum Acknowledgements {
     ) -> Credit {
         Credit(name: name, author: author, license: license, url: URL(string: url)!, notices: notices)
     }
+
+    // MARK: - Markdown
+
+    static let markdown = Group(
+        title: "Markdown",
+        summary: "Reads Markdown documents on this device. It includes the projects below it.",
+        credits: [
+            Credit(
+                name: "cmark-gfm",
+                author: "John MacFarlane and GitHub",
+                license: .bsd2,
+                url: URL(string: "https://github.com/swiftlang/swift-cmark")!,
+                notices: ["Copyright (c) 2014, John MacFarlane", "All rights reserved."],
+                note: "The Markdown parser, from the Swift project's swift-cmark."
+            ),
+            Credit(
+                name: "Houdini",
+                author: "Vicent Martí",
+                license: .mit,
+                url: URL(string: "https://github.com/vmg/houdini")!,
+                notices: ["Copyright (C) 2012 Vicent Martí"],
+                note: "cmark-gfm's HTML escaping and entity decoding derive from Houdini."
+            ),
+            Credit(
+                name: "GitHub buffer code",
+                author: "GitHub",
+                license: .mit,
+                url: URL(string: "https://github.com/swiftlang/swift-cmark")!,
+                notices: ["(C) 2012 Github, Inc."],
+                note: "cmark-gfm's string buffers derive from code by GitHub."
+            ),
+            Credit(
+                name: "utf8proc",
+                author: "Public Software Group e. V.",
+                license: .mit,
+                url: URL(string: "https://github.com/JuliaStrings/utf8proc")!,
+                notices: ["(C) 2009 Public Software Group e. V., Berlin, Germany."],
+                note: "cmark-gfm's UTF-8 handling derives from utf8proc."
+            ),
+        ]
+    )
 
     // MARK: - Fonts
 

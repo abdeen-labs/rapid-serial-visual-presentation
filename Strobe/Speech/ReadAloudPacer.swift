@@ -483,8 +483,10 @@ final class ReadAloudPacer: WordPacer {
                     nextStep = context.words.indices.contains(resume) ? .words(resume) : nil
                 }
             case .words(let start):
-                let range = SpeechChunker.chunk(startingAt: start, in: context.words, chapterStarts: chapterStarts)
-                let script = SpeechScript(words: context.words, range: range)
+                let range = SpeechChunker.chunk(
+                    startingAt: start, in: context.words, chapterStarts: chapterStarts, blockEnds: context.blockEnds
+                )
+                let script = SpeechScript(words: context.words, range: range, blockEnds: context.blockEnds)
                 if !script.text.isEmpty {
                     append(.words(script))
                     if breaksAfter(range, in: context) {
@@ -514,6 +516,7 @@ final class ReadAloudPacer: WordPacer {
         return RSVPEngine.breaksAfterWord(
             at: last,
             in: context.words,
+            blockEnds: context.blockEnds,
             nextWordStartsChapter: context.chapters[last + 1] != nil,
             timing: timing
         )

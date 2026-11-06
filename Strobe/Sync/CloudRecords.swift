@@ -49,12 +49,16 @@ nonisolated enum CloudSyncSchema {
         /// `ComplexityStorage` data, as an asset. Absent for books imported
         /// before complexity scores existed.
         static let complexity = "complexity"
+        /// `BlockEndStorage` data, as an asset. Absent for books imported
+        /// before block ends were recorded, and for PDFs. Older builds don't
+        /// read it, so it needs no new `bookFormat`.
+        static let blockEnds = "blockEnds"
 
         /// Every field. `CloudSchemaSeed` sets them all; a new field goes
         /// here too.
         static let all = [
             format, title, fileName, dateAdded, wordCount, chapters, chaptersAsset,
-            contentHash, words, complexity,
+            contentHash, words, complexity, blockEnds,
         ]
     }
 
@@ -131,6 +135,9 @@ nonisolated enum CloudSchemaSeed {
         ).write(to: book)
         book[CloudSyncSchema.BookField.words] = try asset(words, named: "words")
         book[CloudSyncSchema.BookField.complexity] = try asset(ComplexityStorage.encode([0.5]), named: "complexity")
+        book[CloudSyncSchema.BookField.blockEnds] = try asset(
+            BlockEndStorage.encode(BlockEnds([0: .block])) ?? Data(), named: "blockEnds"
+        )
         book[CloudSyncSchema.BookField.chaptersAsset] = try asset(JSONEncoder().encode(chapters), named: "chapters")
 
         let state = CKRecord(
@@ -476,6 +483,7 @@ nonisolated enum ContentFingerprint {
 nonisolated struct BookUpload {
     let wordsURL: URL?
     let complexityURL: URL?
+    let blockEndsURL: URL?
     /// Only for chapter lists too long for the record.
     let chaptersURL: URL?
     let contentHash: String
@@ -487,7 +495,13 @@ nonisolated struct BookUpload {
         FileManager.default.temporaryDirectory.appending(path: "CloudSyncUploads", directoryHint: .isDirectory)
     }
 
-    static func prepare(documentID: UUID, words: Data, complexity: Data?, chapters: [Chapter]) throws -> BookUpload {
+    static func prepare(
+        documentID: UUID,
+        words: Data,
+        complexity: Data?,
+        blockEnds: Data? = nil,
+        chapters: [Chapter]
+    ) throws -> BookUpload {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         func write(_ data: Data, as fileExtension: String) throws -> URL {
@@ -497,6 +511,7 @@ nonisolated struct BookUpload {
         }
         let wordsURL = try words.isEmpty ? nil : write(words, as: "words")
         let complexityURL = try complexity.flatMap { $0.isEmpty ? nil : try write($0, as: "complexity") }
+        let blockEndsURL = try blockEnds.flatMap { $0.isEmpty ? nil : try write($0, as: "blockEnds") }
         let chapterData = try JSONEncoder().encode(chapters)
         let chaptersURL = try chapterData.count > CloudSyncSchema.maxInlineChapterBytes
             ? write(chapterData, as: "chapters")
@@ -504,9 +519,11 @@ nonisolated struct BookUpload {
         return BookUpload(
             wordsURL: wordsURL,
             complexityURL: complexityURL,
+            blockEndsURL: blockEndsURL,
             chaptersURL: chaptersURL,
             contentHash: ContentFingerprint.of(words),
-            byteCount: words.count + (complexity?.count ?? 0) + (chaptersURL == nil ? 0 : chapterData.count)
+            byteCount: words.count + (complexity?.count ?? 0) + (blockEnds?.count ?? 0)
+                + (chaptersURL == nil ? 0 : chapterData.count)
         )
     }
 
@@ -515,12 +532,16 @@ nonisolated struct BookUpload {
     }
 }
 
-/// A downloaded book's words and complexity scores, checked against its record.
+/// A downloaded book's words, complexity scores, and block ends, checked
+/// against its record.
 nonisolated struct BookContent {
     let words: Data
     let complexity: Data?
     /// Chapters that came as an asset; nil when they were in the record.
     var chapters: [Chapter]?
+    /// Block ends that all fall inside the words; nil when the book has none
+    /// or they don't fit it.
+    var blockEnds: Data?
 
     /// Reads the asset files CloudKit downloaded. Returns nil when the words
     /// are missing or don't match the record's fingerprint.
@@ -528,6 +549,7 @@ nonisolated struct BookContent {
         wordsURL: URL?,
         complexityURL: URL?,
         chaptersURL: URL? = nil,
+        blockEndsURL: URL? = nil,
         fields: BookRecordFields
     ) -> BookContent? {
         let words: Data
@@ -547,7 +569,16 @@ nonisolated struct BookContent {
         let chapters = chaptersURL
             .flatMap { try? Data(contentsOf: $0) }
             .flatMap { try? JSONDecoder().decode([Chapter].self, from: $0) }
-        return BookContent(words: words, complexity: complexity, chapters: chapters)
+        // Block ends past the last word don't belong to these words; the
+        // book then reads without them.
+        let blockEnds = blockEndsURL
+            .flatMap { try? Data(contentsOf: $0) }
+            .flatMap { data -> Data? in
+                let ends = BlockEndStorage.decode(data)
+                guard let last = ends.lastIndex, last < fields.wordCount else { return nil }
+                return data
+            }
+        return BookContent(words: words, complexity: complexity, chapters: chapters, blockEnds: blockEnds)
     }
 
     /// Splits books, in order, into runs saved together: each run's `sizes`

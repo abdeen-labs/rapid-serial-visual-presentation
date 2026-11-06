@@ -685,7 +685,7 @@ extension ContentView {
                 // encoding a book-length word array is ~2 MB of work that
                 // would otherwise hitch the main thread at import completion.
                 let extraction = Task.detached(priority: .userInitiated) {
-                    () -> (result: ImportResult, wordsBlob: Data, complexityBlob: Data?) in
+                    () -> (result: ImportResult, wordsBlob: Data, complexityBlob: Data?, blockEndsBlob: Data?) in
                     let detectedType = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
                     let result = try DocumentImportPipeline.extractWordsAndChapters(
                         from: url,
@@ -697,7 +697,7 @@ extension ContentView {
                     let complexityBlob = result.complexityScores.isEmpty
                         ? nil
                         : ComplexityStorage.encode(result.complexityScores)
-                    return (result, wordsBlob, complexityBlob)
+                    return (result, wordsBlob, complexityBlob, BlockEndStorage.encode(result.blockEnds))
                 }
                 // Detached tasks don't inherit cancellation — forward the
                 // overlay's Cancel to the extraction work explicitly.
@@ -727,6 +727,7 @@ extension ContentView {
                     chapters: extracted.result.chapters,
                     wordsPerMinute: defaultWPM
                 )
+                document.blockEndsBlob = extracted.blockEndsBlob
                 modelContext.insert(document)
                 try modelContext.save()
             } catch is CancellationError {

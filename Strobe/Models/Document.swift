@@ -25,6 +25,11 @@ final class Document {
     @Attribute(.externalStorage) var wordsBlob: Data?
     /// Per-word complexity scores stored as raw Float binary data.
     @Attribute(.externalStorage) var complexityBlob: Data?
+    /// Where the document's blocks end (``BlockEndStorage``). Nil for a
+    /// document imported before block ends were recorded, or one whose
+    /// format has none (PDF); it then reads without block pauses. Never
+    /// changes after import.
+    @Attribute(.externalStorage) var blockEndsBlob: Data? = nil
     var chapters: [Chapter]
     var currentWordIndex: Int
     /// The furthest word index ever reached, used for progress display only —
@@ -42,6 +47,8 @@ final class Document {
     @Transient private var cachedWords: [String]?
     /// In-memory cache of decoded complexity scores.
     @Transient private var cachedComplexity: [Float]?
+    /// In-memory cache of decoded block ends.
+    @Transient private var cachedBlockEnds: BlockEnds?
 
     /// The document's words, resolved from `wordsBlob` (preferred) or the legacy `words` array.
     /// Results are cached in memory for the lifetime of the model object.
@@ -105,6 +112,27 @@ final class Document {
             ComplexityStorage.decode(blob)
         }.value
         cachedComplexity = decoded
+        return decoded
+    }
+
+    /// The document's block ends, decoded from `blockEndsBlob`.
+    var blockEnds: BlockEnds {
+        if let cachedBlockEnds { return cachedBlockEnds }
+        let decoded = BlockEndStorage.decode(blockEndsBlob)
+        cachedBlockEnds = decoded
+        return decoded
+    }
+
+    /// Asynchronously resolves ``blockEnds``, decoding the blob off the main
+    /// actor.
+    func loadBlockEndsAsync() async -> BlockEnds {
+        if let cachedBlockEnds { return cachedBlockEnds }
+        guard let blockEndsBlob, !blockEndsBlob.isEmpty else { return .none }
+        let blob = blockEndsBlob
+        let decoded = await Task.detached(priority: .userInitiated) {
+            BlockEndStorage.decode(blob)
+        }.value
+        cachedBlockEnds = decoded
         return decoded
     }
 

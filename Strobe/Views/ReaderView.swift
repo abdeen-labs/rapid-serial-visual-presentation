@@ -150,11 +150,15 @@ struct ReaderView: View {
         guard !isLoaded else { return }
         let words = await document.loadReadingWordsAsync()
         let scores = await document.loadComplexityScoresAsync()
+        let blockEnds = await document.loadBlockEndsAsync()
         let effectiveIndex = startingWordIndex ?? document.currentWordIndex
         // The saved position, not the starting one: opening at a chapter
         // counts as moving there.
         savedEngineIndex = document.currentWordIndex
-        engine.load(words: words, currentIndex: effectiveIndex, complexityScores: scores, chapters: document.chapters)
+        engine.load(
+            words: words, currentIndex: effectiveIndex, complexityScores: scores,
+            chapters: document.chapters, blockEnds: blockEnds
+        )
         isRightToLeftDocument = PassageView.isRTLDominant(words)
         isLoaded = true
         // A document resumed at its last word (with more than one word) opens

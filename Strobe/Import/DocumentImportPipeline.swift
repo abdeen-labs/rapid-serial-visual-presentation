@@ -2,30 +2,42 @@ import Foundation
 internal import UniformTypeIdentifiers
 
 /// The detected file format of an imported document.
-enum DocumentSourceType: String, Equatable {
+nonisolated enum DocumentSourceType: String, Equatable {
     case pdf
     case epub
     case plainText
+    case markdown
     case unknown
 }
 
 /// The result of a document import operation.
-struct ImportResult {
+nonisolated struct ImportResult {
     let words: [String]
     let complexityScores: [Float]
     let chapters: [Chapter]
     let sourceType: DocumentSourceType
     let title: String?
+    /// Where the document's blocks end; none for a PDF.
+    var blockEnds: BlockEnds = .none
 }
 
 /// Routes document files to the appropriate extractor based on file type.
 ///
 /// Serves as the entry point for the import pipeline: detects the source type,
-/// delegates to ``PDFTextExtractor`` or ``EPUBTextExtractor``, and resolves
-/// the display title from metadata or the filename.
+/// delegates to ``PDFTextExtractor``, ``EPUBTextExtractor``,
+/// ``MarkdownTextExtractor``, or the plain-text reader, and resolves the
+/// display title from metadata or the filename.
 enum DocumentImportPipeline {
+    /// Markdown, as `Info.plist` imports it: a kind of plain text, so a
+    /// picker or drop that takes plain text takes it too. A system that
+    /// declares the type itself keeps its own declaration.
+    nonisolated static let markdownType = UTType(importedAs: "net.daringfireball.markdown", conformingTo: .plainText)
+
+    /// The extensions read as Markdown, matching `Info.plist`'s declaration.
+    nonisolated static let markdownFileExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn"]
+
     /// The content types the app can import via the file picker.
-    nonisolated static let supportedContentTypes: [UTType] = [.pdf, .epub, .plainText]
+    nonisolated static let supportedContentTypes: [UTType] = [.pdf, .epub, markdownType, .plainText]
 
     /// Upper bound on plain-text file size — beyond any real book; bounds
     /// memory against a pathological multi-gigabyte file.
@@ -37,6 +49,7 @@ enum DocumentImportPipeline {
         if let detectedContentType {
             if detectedContentType.conforms(to: .pdf) { return .pdf }
             if detectedContentType.conforms(to: .epub) { return .epub }
+            if detectedContentType.conforms(to: markdownType) || isMarkdown(url) { return .markdown }
             if detectedContentType.conforms(to: .plainText) { return .plainText }
         }
 
@@ -46,11 +59,20 @@ enum DocumentImportPipeline {
             return .pdf
         case "epub":
             return .epub
-        case "txt", "text", "md", "markdown":
+        case "txt", "text":
             return .plainText
+        case _ where markdownFileExtensions.contains(ext):
+            return .markdown
         default:
             return .unknown
         }
+    }
+
+    /// Whether the file's extension is one of Markdown's, which decides
+    /// between Markdown and plain text when the system calls the file
+    /// plain text.
+    nonisolated private static func isMarkdown(_ url: URL) -> Bool {
+        markdownFileExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Returns the document's metadata title if available, otherwise cleans up the filename.
@@ -68,7 +90,7 @@ enum DocumentImportPipeline {
         var name = fileName
         if let dotRange = name.range(of: ".", options: .backwards) {
             let ext = String(name[dotRange.upperBound...]).lowercased()
-            if ["pdf", "epub", "txt", "text", "md", "markdown"].contains(ext) {
+            if ["pdf", "epub", "txt", "text"].contains(ext) || markdownFileExtensions.contains(ext) {
                 name = String(name[..<dotRange.lowerBound])
             }
         }
@@ -119,16 +141,39 @@ enum DocumentImportPipeline {
             try Task.checkCancellation()
             let complexity = WordComplexityAnalyzer.analyzeComplexity(result.words)
             try Task.checkCancellation()
-            return ImportResult(words: result.words, complexityScores: complexity, chapters: result.chapters, sourceType: .epub, title: result.title)
+            return ImportResult(
+                words: result.words, complexityScores: complexity, chapters: result.chapters,
+                sourceType: .epub, title: result.title, blockEnds: result.blockEnds
+            )
         case .plainText:
-            let text = try readPlainText(from: url)
+            // Line ends are made plain first: the cleaner splits at every
+            // newline character, so a `\r\n` would leave a blank line, and a
+            // blank line ends a paragraph.
+            let text = PlainTextParagraphs.normalizingLineEnds(try readPlainText(from: url))
             let cleaned = TextCleaner.cleanText(text, level: cleaningLevel)
             try Task.checkCancellation()
-            let words = Tokenizer.tokenize(cleaned)
+            let (words, blockEnds) = PlainTextParagraphs.tokenize(cleaned)
             try Task.checkCancellation()
             let complexity = WordComplexityAnalyzer.analyzeComplexity(words)
             try Task.checkCancellation()
-            return ImportResult(words: words, complexityScores: complexity, chapters: [], sourceType: .plainText, title: nil)
+            return ImportResult(
+                words: words, complexityScores: complexity, chapters: [],
+                sourceType: .plainText, title: nil, blockEnds: blockEnds
+            )
+        case .markdown:
+            // Markdown's structure already says what is prose. The cleaning
+            // level doesn't apply: TextCleaner's page-number, navigation, and
+            // table rules would drop real content, such as a heading `Next`,
+            // a paragraph `42`, or a table's rows.
+            let text = try readPlainText(from: url)
+            let result = try MarkdownTextExtractor.extractWordsAndChapters(from: text)
+            try Task.checkCancellation()
+            let complexity = WordComplexityAnalyzer.analyzeComplexity(result.words)
+            try Task.checkCancellation()
+            return ImportResult(
+                words: result.words, complexityScores: complexity, chapters: result.chapters,
+                sourceType: .markdown, title: result.title, blockEnds: result.blockEnds
+            )
         case .unknown:
             throw DocumentImportError.unsupportedFileType
         }

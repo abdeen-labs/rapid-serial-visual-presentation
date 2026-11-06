@@ -5,6 +5,8 @@ struct EPUBExtractionResult {
     let words: [String]
     let chapters: [Chapter]
     let title: String?
+    /// Where blocks end: block elements and the end of each spine document.
+    var blockEnds: BlockEnds = .none
 }
 
 /// Extracts tokenized words and chapter structure from EPUB files.
@@ -70,11 +72,16 @@ enum EPUBTextExtractor {
         var spineWordOffsets: [String: Int] = [:]
         var anchorWordOffsets: [String: [String: Int]] = [:]
         var headingChapters: [Chapter] = []
+        var blockEnds = BlockEnds()
         var carry: String?
 
         for (i, pair) in sectionTexts.enumerated() {
             if i % 16 == 0 { try Task.checkCancellation() }
-            let positions = pair.content.appendWords(cleanedText: cleanedTexts[i], into: &words, carry: &carry)
+            // Each spine document starts a block.
+            if carry == nil, !words.isEmpty { blockEnds.mark(words.count - 1, as: .block) }
+            let positions = pair.content.appendWords(
+                cleanedText: cleanedTexts[i], into: &words, carry: &carry, blockEnds: &blockEnds
+            )
             spineWordOffsets[pair.path] = positions[0]
             anchorWordOffsets[pair.path] = pair.content.anchors.compactMapValues { positions[$0] }
             headingChapters += pair.content.headings.compactMap { heading in
@@ -85,6 +92,7 @@ enum EPUBTextExtractor {
         if let carry, !carry.isEmpty {
             words.append(carry)
         }
+        if !words.isEmpty { blockEnds.mark(words.count - 1, as: .block) }
 
         // Extract chapters from NCX or NAV
         let chapters = extractChapters(
@@ -97,7 +105,7 @@ enum EPUBTextExtractor {
         let allChapters = deduplicateChapters(chapters + headingChapters)
             .filter { words.indices.contains($0.wordIndex) }
 
-        return EPUBExtractionResult(words: words, chapters: allChapters, title: opf.title)
+        return EPUBExtractionResult(words: words, chapters: allChapters, title: opf.title, blockEnds: blockEnds)
     }
 
     // MARK: - DRM detection

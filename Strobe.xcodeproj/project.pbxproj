@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		5A4E00000000000000000002 /* StrobeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5A4E00000000000000000001 /* StrobeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5B0A00000000000000000002 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5B0A00000000000000000001 /* FluidAudio */; };
+		6D0A00000000000000000002 /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = 6D0A00000000000000000001 /* cmark-gfm */; };
+		6D0A00000000000000000005 /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 6D0A00000000000000000004 /* cmark-gfm-extensions */; };
 		7D1D6E00000000000000000D /* StrobeWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7D1D6E000000000000000001 /* StrobeWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E49D53FB2F6760E300AFC126 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E49D53FA2F6760E300AFC126 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
@@ -176,6 +178,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				5B0A00000000000000000002 /* FluidAudio in Frameworks */,
+				6D0A00000000000000000002 /* cmark-gfm in Frameworks */,
+				6D0A00000000000000000005 /* cmark-gfm-extensions in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -282,6 +286,8 @@
 			name = Strobe;
 			packageProductDependencies = (
 				5B0A00000000000000000001 /* FluidAudio */,
+				6D0A00000000000000000001 /* cmark-gfm */,
+				6D0A00000000000000000004 /* cmark-gfm-extensions */,
 			);
 			productName = Strobe;
 			productReference = E44F01FB2F4047FB00D04D31 /* Strobe.app */;
@@ -346,6 +352,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				5B0A00000000000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				6D0A00000000000000000003 /* XCRemoteSwiftPackageReference "swift-cmark" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E44F01FC2F4047FB00D04D31 /* Products */;
@@ -1014,6 +1021,14 @@
 				version = 0.17.7;
 			};
 		};
+		6D0A00000000000000000003 /* XCRemoteSwiftPackageReference "swift-cmark" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-cmark.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1021,6 +1036,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5B0A00000000000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
+		};
+		6D0A00000000000000000001 /* cmark-gfm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6D0A00000000000000000003 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm";
+		};
+		6D0A00000000000000000004 /* cmark-gfm-extensions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6D0A00000000000000000003 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm-extensions";
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -207,6 +207,11 @@ final class RSVPEngine {
     /// Pre-computed complexity scores, parallel to the `words` array. Nil for legacy documents.
     private(set) var complexityScores: [Float]?
 
+    /// Where the document's blocks end, which pause like sentence ends (a
+    /// table cell's like a clause mark), less those right before an announced
+    /// chapter. None for documents imported before they were recorded.
+    private(set) var blockEnds: BlockEnds = .none
+
     /// The word at the current playback position, or an empty string if out of bounds.
     var currentWord: String {
         guard currentIndex >= 0, currentIndex < words.count else { return "" }
@@ -280,7 +285,13 @@ final class RSVPEngine {
     /// Replaces the word array, position, and complexity scores after
     /// asynchronous loading. The position is clamped to the new bounds.
     /// Intended to be called once, while paused, on an engine created empty.
-    func load(words: [String], currentIndex: Int, complexityScores: [Float]?, chapters: [Chapter] = []) {
+    func load(
+        words: [String],
+        currentIndex: Int,
+        complexityScores: [Float]?,
+        chapters: [Chapter] = [],
+        blockEnds: BlockEnds = .none
+    ) {
         pause()
         self.words = words
         self.complexityScores = complexityScores
@@ -288,6 +299,7 @@ final class RSVPEngine {
         furthestPlayedIndex = 0
         lastAnnouncedIndex = nil
         setChapters(chapters)
+        self.blockEnds = blockEnds.droppingEnds(beforeChapterStarts: chaptersByIndex.keys)
     }
 
     private func setChapters(_ chapters: [Chapter]) {
@@ -343,6 +355,7 @@ final class RSVPEngine {
             startIndex: currentIndex,
             chapters: chaptersByIndex,
             readingStarts: readingStarts,
+            blockEnds: blockEnds,
             // The rule `announceChapterIfNeeded()` follows.
             announcesChapterAtStart: lastAnnouncedIndex != currentIndex
                 && chaptersByIndex[currentIndex] != nil,
@@ -558,6 +571,7 @@ final class RSVPEngine {
         Self.breaksAfterWord(
             at: currentIndex,
             in: words,
+            blockEnds: blockEnds,
             nextWordStartsChapter: chaptersByIndex[currentIndex + 1] != nil,
             timing: timing
         )
@@ -569,18 +583,21 @@ final class RSVPEngine {
         Self.sentenceBreakInterval(timing: timing, baseInterval: baseInterval)
     }
 
-    /// Whether a blank follows the word at `index`: it ends a sentence and the
-    /// next word doesn't open a chapter, whose announcement is a break of its
-    /// own.
+    /// Whether a blank follows the word at `index`: it ends a sentence, or a
+    /// block that pauses (``BlockEnds/pause(after:in:)``, not a table cell),
+    /// and the next word doesn't open a chapter, whose announcement is a
+    /// break of its own. Never after the last word.
     nonisolated static func breaksAfterWord(
         at index: Int,
         in words: [String],
+        blockEnds: BlockEnds = .none,
         nextWordStartsChapter: Bool,
         timing: ReaderSettings.TimingSnapshot
     ) -> Bool {
         guard timing.sentenceBreakEnabled, timing.sentenceBreakLength > 0,
-              !nextWordStartsChapter else { return false }
+              !nextWordStartsChapter, index >= 0, index + 1 < words.count else { return false }
         return SentenceBreak.endsSentence(at: index, in: words)
+            || blockEnds.pause(after: index, in: words) == .block
     }
 
     /// The blank's time after a sentence, at `baseInterval` per word: one
@@ -612,6 +629,7 @@ final class RSVPEngine {
             forWordAt: currentIndex,
             in: words,
             complexityScores: complexityScores,
+            blockEnds: blockEnds,
             timing: timing,
             baseInterval: baseInterval
         )
@@ -639,10 +657,15 @@ final class RSVPEngine {
     /// both time words here, so the two can't drift apart. Every term scales
     /// with `baseInterval`, so a word takes the same number of base intervals
     /// at any speed.
+    ///
+    /// A word that ends a block (``BlockEnds/pause(after:in:)``) pauses as if
+    /// it ended in a sentence mark, or a clause mark for a table cell, once
+    /// with any marks of its own: punctuation pauses take the longest.
     nonisolated static func interval(
         forWordAt index: Int,
         in words: [String],
         complexityScores: [Float]?,
+        blockEnds: BlockEnds = .none,
         timing: ReaderSettings.TimingSnapshot,
         baseInterval: TimeInterval
     ) -> TimeInterval {
@@ -672,8 +695,10 @@ final class RSVPEngine {
         interval *= wordTime
 
         if timing.sentencePauseEnabled {
+            var marks = PunctuationMarks.marks(in: word)
+            if let end = blockEnds.pause(after: index, in: words) { marks.formUnion(end.marks) }
             interval *= timing.punctuationPauses.multiplier(
-                for: PunctuationMarks.marks(in: word),
+                for: marks,
                 sentenceEnd: timing.sentencePauseMultiplier
             )
         }
