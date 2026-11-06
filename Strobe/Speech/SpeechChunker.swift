@@ -45,19 +45,27 @@ nonisolated enum SpeechChunker {
     ///   ``SentenceBreak/endsSentence(at:in:)``, so `Mr.` or `U.S.` never ends
     ///   one. Starting mid-sentence, as after a seek or a split, gives the
     ///   rest of that sentence.
+    /// - It ends after a word that ends a block in `blockEnds`
+    ///   (``BlockEnds/pause(after:in:)``) as after a sentence end, so the
+    ///   voice breathes after a heading or list item without a period.
     /// - It stops before any chapter start in `chapterStarts` after `start`,
     ///   where the next chapter's title is read first.
     /// - A sentence past ``maximumWords`` words or ``maximumLength`` units is
     ///   split after a word with a clause mark or dash
-    ///   (``PunctuationMarks/clause``, ``PunctuationMarks/dash``), where a
-    ///   voice pauses anyway: the last one that keeps the chunk within
+    ///   (``PunctuationMarks/clause``, ``PunctuationMarks/dash``) or that
+    ///   ends a table cell, where a voice pauses anyway: the last one that keeps the chunk within
     ///   ``preferredWords`` and ``preferredLength``, or else the first one
     ///   past them, never before ``minimumSplitWords`` words. Without one,
     ///   the chunk is as long as the preferred size allows.
     ///
     /// Always holds at least the word at `start`, and is empty only when
     /// `start` is outside `words`.
-    static func chunk(startingAt start: Int, in words: [String], chapterStarts: Set<Int>) -> Range<Int> {
+    static func chunk(
+        startingAt start: Int,
+        in words: [String],
+        chapterStarts: Set<Int>,
+        blockEnds: BlockEnds = .none
+    ) -> Range<Int> {
         guard words.indices.contains(start) else {
             let bound = min(max(start, 0), words.count)
             return bound..<bound
@@ -70,10 +78,11 @@ nonisolated enum SpeechChunker {
             }
             let wordLength = Self.length(of: words[index])
             if index - start == maximumWords || (index > start && length + wordLength > maximumLength) {
-                return start..<splitEnd(from: start, before: index, in: words)
+                return start..<splitEnd(from: start, before: index, in: words, blockEnds: blockEnds)
             }
             length += wordLength
-            if SentenceBreak.endsSentence(at: index, in: words) {
+            if SentenceBreak.endsSentence(at: index, in: words)
+                || blockEnds.pause(after: index, in: words) == .block {
                 return start..<index + 1
             }
             index += 1
@@ -88,7 +97,7 @@ nonisolated enum SpeechChunker {
 
     /// Where a chunk of a sentence too long to stay whole ends, given that
     /// it can't take the word at `limit`.
-    private static func splitEnd(from start: Int, before limit: Int, in words: [String]) -> Int {
+    private static func splitEnd(from start: Int, before limit: Int, in words: [String], blockEnds: BlockEnds) -> Int {
         // The longest chunk within the preferred size, of at least one word.
         var preferredEnd = start + 1
         var length = Self.length(of: words[start])
@@ -102,7 +111,8 @@ nonisolated enum SpeechChunker {
         let pauses: PunctuationMarks = [.clause, .dash]
         var lastWithin: Int?
         for end in stride(from: start + minimumSplitWords, through: limit, by: 1)
-        where !PunctuationMarks.marks(in: words[end - 1]).isDisjoint(with: pauses) {
+        where !PunctuationMarks.marks(in: words[end - 1]).isDisjoint(with: pauses)
+            || blockEnds.pause(after: end - 1, in: words) == .cell {
             guard end <= preferredEnd else {
                 return lastWithin ?? end
             }

@@ -23,6 +23,10 @@ import Foundation
 /// - A number unit keeps its space (`2000 BCE`, `10:30 PM`), so its range
 ///   covers both halves.
 /// - CJK words are joined without spaces, as their text was written.
+/// - A word that ends a block (``BlockEnds/pause(after:in:)``) without a
+///   mark a voice pauses at gets a period, or a comma for a table cell,
+///   inside its range: a heading or list item then sounds finished, and the
+///   cells of a table come apart.
 nonisolated struct SpeechScript: Equatable, Sendable {
 
     /// What the voice is given.
@@ -40,12 +44,15 @@ nonisolated struct SpeechScript: Equatable, Sendable {
     let wordRanges: [Range<Int>]
 
     /// The script for the words of `words` in `range`, which is clamped to
-    /// the document.
-    init(words: [String], range: Range<Int>) {
+    /// the document, with the pauses of the blocks that end in it.
+    init(words: [String], range: Range<Int>, blockEnds: BlockEnds = .none) {
         let range = range.clamped(to: words.indices)
         var writer = ScriptWriter(joinsCJKWords: true)
-        for word in words[range] {
-            writer.append(word)
+        for index in range {
+            writer.append(words[index])
+            if let end = blockEnds.pause(after: index, in: words) {
+                writer.endBlock(end)
+            }
         }
         text = writer.text
         wordIndices = range
@@ -147,6 +154,22 @@ nonisolated private struct ScriptWriter {
         ranges.append(start..<length)
         previous = spoken.text
         pauseIsPending = false
+    }
+
+    /// Ends the last word read with a period for a block or a comma for a
+    /// cell (fullwidth after CJK), inside its range, unless it already ends
+    /// with a mark a voice pauses at.
+    mutating func endBlock(_ kind: BlockEnds.Kind) {
+        guard let previousPosition, let last = previous.unicodeScalars.last,
+              !SpokenWord.endsWithPause(previous) else { return }
+        let isCJK = CJKUtilities.isCJK(last)
+        let mark = switch kind {
+        case .block: isCJK ? "\u{3002}" : "."       // 。 ideographic full stop
+        case .cell: isCJK ? "\u{FF0C}" : ","        // ， fullwidth comma
+        }
+        write(mark)
+        ranges[previousPosition] = ranges[previousPosition].lowerBound..<length
+        previous += mark
     }
 
     private mutating func write(_ piece: String) {

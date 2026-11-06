@@ -8,19 +8,22 @@ enum TextImport {
         let wordCount: Int
         let wordsBlob: Data
         let complexityBlob: Data?
+        /// Where the text's paragraphs end (``BlockEndStorage``).
+        var blockEndsBlob: Data? = nil
     }
 
     /// Tokenizes, scores, and encodes `text`. All three are slow on a long
     /// text, so call this off the main actor. Nil when the text has no
     /// readable words.
     nonisolated static func prepare(_ text: String) -> Prepared? {
-        let words = Tokenizer.tokenize(text)
+        let (words, blockEnds) = PlainTextParagraphs.tokenize(text)
         guard !words.isEmpty else { return nil }
         let scores = WordComplexityAnalyzer.analyzeComplexity(words)
         return Prepared(
             wordCount: words.count,
             wordsBlob: WordStorage.encode(words),
-            complexityBlob: scores.isEmpty ? nil : ComplexityStorage.encode(scores)
+            complexityBlob: scores.isEmpty ? nil : ComplexityStorage.encode(scores),
+            blockEndsBlob: BlockEndStorage.encode(blockEnds)
         )
     }
 
@@ -46,6 +49,7 @@ enum TextImport {
             wordsPerMinute: wordsPerMinute
         )
         document.dateAdded = dateAdded
+        document.blockEndsBlob = prepared.blockEndsBlob
         return document
     }
 

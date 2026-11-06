@@ -913,6 +913,7 @@ final class LibrarySync: CKSyncEngineDelegate {
             let documentID = document.id
             let words = document.wordsBlob.flatMap { $0.isEmpty ? nil : $0 } ?? WordStorage.encode(document.words)
             let complexity = document.complexityBlob
+            let blockEnds = document.blockEndsBlob
             let chapters = document.chapters
             var fields = BookRecordFields(
                 title: document.title,
@@ -925,7 +926,10 @@ final class LibrarySync: CKSyncEngineDelegate {
             let upload: BookUpload
             do {
                 upload = try await Task.detached(priority: .utility) {
-                    try BookUpload.prepare(documentID: documentID, words: words, complexity: complexity, chapters: chapters)
+                    try BookUpload.prepare(
+                        documentID: documentID, words: words, complexity: complexity,
+                        blockEnds: blockEnds, chapters: chapters
+                    )
                 }.value
             } catch {
                 logger.error("Couldn't prepare a book for upload: \(error.localizedDescription, privacy: .public)")
@@ -939,6 +943,9 @@ final class LibrarySync: CKSyncEngineDelegate {
             }
             if let url = upload.complexityURL {
                 record[CloudSyncSchema.BookField.complexity] = CKAsset(fileURL: url)
+            }
+            if let url = upload.blockEndsURL {
+                record[CloudSyncSchema.BookField.blockEnds] = CKAsset(fileURL: url)
             }
             if let url = upload.chaptersURL {
                 record[CloudSyncSchema.BookField.chaptersAsset] = CKAsset(fileURL: url)
@@ -1476,7 +1483,10 @@ final class LibrarySync: CKSyncEngineDelegate {
     private func newBookBytes(of record: CKRecord) -> Int {
         guard let key = CloudRecordKey(recordID: record.recordID),
               ledger.entry(for: key.documentID)?.hasLocalDocument != true else { return 0 }
-        return [CloudSyncSchema.BookField.words, CloudSyncSchema.BookField.complexity, CloudSyncSchema.BookField.chaptersAsset]
+        return [
+            CloudSyncSchema.BookField.words, CloudSyncSchema.BookField.complexity,
+            CloudSyncSchema.BookField.blockEnds, CloudSyncSchema.BookField.chaptersAsset,
+        ]
             .compactMap { (record[$0] as? CKAsset)?.fileURL }
             .compactMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
             .reduce(0, +)
@@ -1504,8 +1514,12 @@ final class LibrarySync: CKSyncEngineDelegate {
             let wordsURL = (record[CloudSyncSchema.BookField.words] as? CKAsset)?.fileURL
             let complexityURL = (record[CloudSyncSchema.BookField.complexity] as? CKAsset)?.fileURL
             let chaptersURL = (record[CloudSyncSchema.BookField.chaptersAsset] as? CKAsset)?.fileURL
+            let blockEndsURL = (record[CloudSyncSchema.BookField.blockEnds] as? CKAsset)?.fileURL
             contents[key.documentID] = await Task.detached(priority: .utility) {
-                BookContent.load(wordsURL: wordsURL, complexityURL: complexityURL, chaptersURL: chaptersURL, fields: fields)
+                BookContent.load(
+                    wordsURL: wordsURL, complexityURL: complexityURL, chaptersURL: chaptersURL,
+                    blockEndsURL: blockEndsURL, fields: fields
+                )
             }.value
             // Sync stopped or started over meanwhile (an account change):
             // these records belong to a ledger that's gone.
@@ -1605,6 +1619,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         )
         document.id = id
         document.dateAdded = fields.dateAdded
+        document.blockEndsBlob = content.blockEnds
         _ = ledger.receiveBook(fields, systemFields: systemFields, for: id, localTitle: nil)
         // Its reading state may have arrived first.
         if let waiting = ledger.entry(for: id)?.syncedState {

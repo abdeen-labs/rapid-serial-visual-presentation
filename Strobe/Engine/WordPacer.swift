@@ -30,6 +30,9 @@ nonisolated struct PacerContext {
     /// Where reading goes on after each announced chapter's title: past the
     /// words that repeat it (``ChapterHeading``).
     let readingStarts: [Int: Int]
+    /// Where the document's blocks end: a chunk ends at a block's end as at
+    /// a sentence's, and a sentence break can follow it.
+    var blockEnds: BlockEnds = .none
     /// Whether a chapter starting at `startIndex` is announced first. False
     /// when its title has already shown, as after pausing during it.
     let announcesChapterAtStart: Bool

@@ -7,6 +7,8 @@ nonisolated struct MarkdownExtractionResult {
     let words: [String]
     let chapters: [Chapter]
     let title: String?
+    /// The last word of each block, a table cell's as a cell.
+    var blockEnds: BlockEnds = .none
 }
 
 /// Reads a Markdown document as the prose it renders to.
@@ -50,10 +52,17 @@ nonisolated enum MarkdownTextExtractor {
         var text: String
         /// The heading's level, 1 to 6; nil for a block that isn't a heading.
         var headingLevel: Int?
+        /// Whether the block is a table cell, which pauses like a clause
+        /// mark rather than a sentence end.
+        var isTableCell = false
+        /// Whether the block is the first cell of a table with text.
+        var startsTable = false
 
-        init(_ text: String, headingLevel: Int? = nil) {
+        init(_ text: String, headingLevel: Int? = nil, isTableCell: Bool = false, startsTable: Bool = false) {
             self.text = text
             self.headingLevel = headingLevel
+            self.isTableCell = isTableCell
+            self.startsTable = startsTable
         }
     }
 
@@ -70,27 +79,43 @@ nonisolated enum MarkdownTextExtractor {
         let source = MarkdownFrontMatter.split(text)
         guard isSafelyNested(source.body) else {
             try Task.checkCancellation()
-            return MarkdownExtractionResult(words: Tokenizer.tokenize(source.body), chapters: [], title: source.title)
+            let plain = PlainTextParagraphs.tokenize(source.body)
+            return MarkdownExtractionResult(
+                words: plain.words, chapters: [], title: source.title, blockEnds: plain.blockEnds
+            )
         }
         var words: [String] = []
         var chapters: [Chapter] = []
+        var blockEnds = BlockEnds()
         var firstBlock: Block?
         var levelOneHeadings = 0
+        // A table's last cell ends a block, not just a cell: it's known once
+        // something other than that table's cells follows.
+        var lastCellEnd: Int?
 
         try forEachBlock(in: source.body) { block in
             let start = words.count
             words.append(contentsOf: Tokenizer.tokenize(block.text))
             guard words.count > start else { return }
+            if let cell = lastCellEnd, !block.isTableCell || block.startsTable {
+                blockEnds.mark(cell, as: .block)
+            }
+            lastCellEnd = block.isTableCell ? words.count - 1 : nil
+            blockEnds.mark(words.count - 1, as: block.isTableCell ? .cell : .block)
             if firstBlock == nil { firstBlock = block }
             guard let level = block.headingLevel else { return }
             if level == 1 { levelOneHeadings += 1 }
             chapters.append(Chapter(title: collapsingWhitespace(block.text), wordIndex: start))
         }
 
+        if let cell = lastCellEnd { blockEnds.mark(cell, as: .block) }
+
         let headingTitle = firstBlock.flatMap { block in
             block.headingLevel == 1 && levelOneHeadings == 1 ? collapsingWhitespace(block.text) : nil
         }
-        return MarkdownExtractionResult(words: words, chapters: chapters, title: source.title ?? headingTitle)
+        return MarkdownExtractionResult(
+            words: words, chapters: chapters, title: source.title ?? headingTitle, blockEnds: blockEnds
+        )
     }
 
     /// The document's blocks, in reading order, without its front matter.
@@ -207,6 +232,10 @@ nonisolated enum MarkdownTextExtractor {
         /// between them.
         private var text: String?
         private var headingLevel: Int?
+        private var isTableCell = false
+        /// Whether the next table cell with text is its table's first.
+        private var tableStartPending = false
+        private var startsTable = false
         /// The list labels the open block starts with.
         private var label = ""
         /// The lists the reader is inside, innermost last: an ordered list's
@@ -272,28 +301,36 @@ nonisolated enum MarkdownTextExtractor {
                 // they're told apart by name. Of them only table cells hold
                 // text of their own; strikethrough's children are read
                 // through it, and tables and rows just contain cells.
-                if strcmp(cmark_node_get_type_string(node), "table_cell") == 0 {
-                    if entering { open() } else { try close(emit) }
+                let typeName = cmark_node_get_type_string(node)
+                if strcmp(typeName, "table_cell") == 0 {
+                    if entering { open(isTableCell: true) } else { try close(emit) }
+                } else if entering, strcmp(typeName, "table") == 0 {
+                    tableStartPending = true
                 }
             }
         }
 
-        private mutating func open(headingLevel: Int? = nil) {
+        private mutating func open(headingLevel: Int? = nil, isTableCell: Bool = false) {
             label = takeLabel()
             text = ""
             self.headingLevel = headingLevel
+            self.isTableCell = isTableCell
+            startsTable = isTableCell && tableStartPending
         }
 
         private mutating func close(_ emit: (Block) throws -> Void) throws {
             defer {
                 text = nil
                 headingLevel = nil
+                isTableCell = false
+                startsTable = false
                 label = ""
             }
             guard let text else { return }
             let collapsed = MarkdownTextExtractor.collapsingWhitespace(text)
             guard !collapsed.isEmpty else { return }
-            try emit(Block(label + collapsed, headingLevel: headingLevel))
+            if startsTable { tableStartPending = false }
+            try emit(Block(label + collapsed, headingLevel: headingLevel, isTableCell: isTableCell, startsTable: startsTable))
         }
 
         private mutating func append(_ string: String) {

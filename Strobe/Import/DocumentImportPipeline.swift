@@ -17,6 +17,8 @@ nonisolated struct ImportResult {
     let chapters: [Chapter]
     let sourceType: DocumentSourceType
     let title: String?
+    /// Where the document's blocks end; none for a PDF.
+    var blockEnds: BlockEnds = .none
 }
 
 /// Routes document files to the appropriate extractor based on file type.
@@ -139,16 +141,25 @@ enum DocumentImportPipeline {
             try Task.checkCancellation()
             let complexity = WordComplexityAnalyzer.analyzeComplexity(result.words)
             try Task.checkCancellation()
-            return ImportResult(words: result.words, complexityScores: complexity, chapters: result.chapters, sourceType: .epub, title: result.title)
+            return ImportResult(
+                words: result.words, complexityScores: complexity, chapters: result.chapters,
+                sourceType: .epub, title: result.title, blockEnds: result.blockEnds
+            )
         case .plainText:
-            let text = try readPlainText(from: url)
+            // Line ends are made plain first: the cleaner splits at every
+            // newline character, so a `\r\n` would leave a blank line, and a
+            // blank line ends a paragraph.
+            let text = PlainTextParagraphs.normalizingLineEnds(try readPlainText(from: url))
             let cleaned = TextCleaner.cleanText(text, level: cleaningLevel)
             try Task.checkCancellation()
-            let words = Tokenizer.tokenize(cleaned)
+            let (words, blockEnds) = PlainTextParagraphs.tokenize(cleaned)
             try Task.checkCancellation()
             let complexity = WordComplexityAnalyzer.analyzeComplexity(words)
             try Task.checkCancellation()
-            return ImportResult(words: words, complexityScores: complexity, chapters: [], sourceType: .plainText, title: nil)
+            return ImportResult(
+                words: words, complexityScores: complexity, chapters: [],
+                sourceType: .plainText, title: nil, blockEnds: blockEnds
+            )
         case .markdown:
             // Markdown's structure already says what is prose. The cleaning
             // level doesn't apply: TextCleaner's page-number, navigation, and
@@ -161,7 +172,7 @@ enum DocumentImportPipeline {
             try Task.checkCancellation()
             return ImportResult(
                 words: result.words, complexityScores: complexity, chapters: result.chapters,
-                sourceType: .markdown, title: result.title
+                sourceType: .markdown, title: result.title, blockEnds: result.blockEnds
             )
         case .unknown:
             throw DocumentImportError.unsupportedFileType
