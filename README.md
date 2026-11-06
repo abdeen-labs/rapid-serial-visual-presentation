@@ -85,10 +85,9 @@ On a Mac, or an iPad with a keyboard: <kbd>Space</kbd> reads and pauses, <kbd>�
 
 Import EPUB, PDF, plain-text, and Markdown files from Files or with drag and drop, a whole batch at once, or paste in an article and see its word count and reading time before you start. Every book gets its own cover, the one you're reading waits at the top, and Strobe picks up at your exact word.
 
-Markdown imports read headings, paragraphs, lists, links, image descriptions, inline code, and table cells without formatting markers. Fenced and indented code blocks and raw HTML blocks are skipped. Unmatched or escaped Markdown markers remain literal text. Markdown parsing applies even with text cleaning off; existing library documents are unchanged (reimport a Markdown file to use the new parser).
-
 - **Share from anywhere.** Share an article from Safari, a link, or selected text from any app to Strobe, and it's waiting in your library without the page's menus and ads.
-- **Chapters at a glance.** EPUB tables of contents and PDF bookmarks become chapters, each with its reading time at your speed.
+- **Chapters at a glance.** EPUB tables of contents, PDF bookmarks, and Markdown headings become chapters, each with its reading time at your speed.
+- **Markdown as it reads.** Formatting marks, link addresses, code blocks, and front matter stay out of the way, and the words you'd see on the rendered page are what you read.
 - **Clean text.** Page numbers, running headers, and footers are stripped on import.
 - **Not just English.** Chinese, Japanese, and Korean text is split into words automatically, and Arabic keeps its connected letterforms.
 
@@ -154,4 +153,4 @@ Issues and pull requests are welcome. Keep changes focused, include tests when y
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). The fonts, Swift Markdown, cmark-gfm, FluidAudio, and the Kokoro voice model keep their own licenses: see [Third-Party Notices](THIRD_PARTY_NOTICES.md), or Settings ▸ About ▸ Acknowledgements in the app.
+Licensed under the [Apache License, Version 2.0](LICENSE). The fonts, FluidAudio, cmark-gfm, and the Kokoro voice model keep their own licenses: see [Third-Party Notices](THIRD_PARTY_NOTICES.md), or Settings ▸ About ▸ Acknowledgements in the app.

@@ -127,9 +127,10 @@ nonisolated enum LikelyDuplicates {
         return trimmed.lowercased()
     }
 
-    /// The extensions of the plain-text files Strobe imports, as
-    /// `DocumentImportPipeline` reads them.
-    private static let textFileExtensions: Set<String> = ["txt", "text", "md", "markdown"]
+    /// The extensions of the plain-text and Markdown files Strobe imports,
+    /// as `DocumentImportPipeline` reads them.
+    private static let textFileExtensions: Set<String> = Set(["txt", "text"])
+        .union(DocumentImportPipeline.markdownFileExtensions)
 
     // MARK: - Merging
 

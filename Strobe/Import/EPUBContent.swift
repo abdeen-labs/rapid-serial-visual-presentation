@@ -5,7 +5,8 @@ import Foundation
 struct EPUBContent {
     var text = ""
     var anchors: [String: Int] = [:]
-    var headings: [(title: String, offset: Int)] = []
+    /// Each heading's text, where it starts, and its level (1 for `<h1>`).
+    var headings: [(title: String, offset: Int, level: Int)] = []
     /// Where block elements (paragraphs, headings, list items) open or close,
     /// ascending. Words on either side of one never join as a number unit.
     var blockBreaks: [Int] = []
@@ -70,7 +71,9 @@ struct EPUBContent {
             if closing, let active = heading, active.tag == name {
                 let title = (result.text as NSString).substring(from: active.offset)
                     .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-                if !title.isEmpty { result.headings.append((title, active.offset)) }
+                if !title.isEmpty {
+                    result.headings.append((title, active.offset, Int(active.tag.dropFirst()) ?? 1))
+                }
                 heading = nil
             }
             if blockTags.contains(name) {
