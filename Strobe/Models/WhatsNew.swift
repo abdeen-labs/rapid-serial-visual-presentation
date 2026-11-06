@@ -48,6 +48,24 @@ nonisolated enum WhatsNew {
 
     /// Every release, newest first.
     static let releases: [Release] = [
+        Release(version: "3.5", items: [
+            Item(
+                symbol: "doc.text",
+                title: "Markdown",
+                detail: "Import Markdown files, from notes apps like Obsidian too. Headings become chapters, and formatting, links, and code stay out of the words."
+            ),
+            Item(
+                symbol: "paragraphsign",
+                title: "Pauses Between Paragraphs",
+                detail: "Headings, list items, and paragraphs without a final period now end with a pause, as a sentence does, in books, Markdown, and pasted text."
+            ),
+            Item(
+                symbol: "waveform",
+                title: "Smoother Voice",
+                detail: "The voice says \"the\" and \"a\" the way people do, by the word that follows, and pauses between paragraphs.",
+                requirement: .readAloud
+            ),
+        ]),
         Release(version: "3.4", items: [
             Item(
                 symbol: "chart.bar",
