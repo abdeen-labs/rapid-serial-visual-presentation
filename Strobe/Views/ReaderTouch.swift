@@ -9,6 +9,10 @@ import Foundation
 /// fingers lift, until a tap, two fingers again, or any other pause stops
 /// it. With Hold to Read off, reading is already hands-free, and a second
 /// finger counts as a tap.
+///
+/// A sideways swipe on reading that no finger holds steps back or forward
+/// through the words, and reading goes on from there when the finger lifts
+/// (see ``swipe(of:in:landedOnReading:isAdjustingSpeed:)``).
 nonisolated enum ReaderTouch {
     /// What the current touch is doing, decided as it moves.
     nonisolated enum Mode: Equatable {
@@ -18,9 +22,22 @@ nonisolated enum ReaderTouch {
         case reading
         /// A horizontal swipe stepping through words.
         case scrubbing
+        /// A horizontal swipe that interrupted reading the touch landed on
+        /// (hands-free, Tap to Read, a voice). It steps through words like
+        /// any swipe, and reading goes on when the finger lifts, hands-free
+        /// again if it was.
+        case scrubbingMidRead(handsFree: Bool)
         /// A second finger landed and did what this touch does. The rest
         /// of the touch, lifting the fingers included, changes nothing.
         case twoFinger
+
+        /// Whether the touch is a swipe stepping through words.
+        var isScrubbing: Bool {
+            switch self {
+            case .scrubbing, .scrubbingMidRead: true
+            case .undecided, .reading, .twoFinger: false
+            }
+        }
     }
 
     /// How the reader learns that a second finger joined a touch.
@@ -57,6 +74,9 @@ nonisolated enum ReaderTouch {
         /// Start reading if it isn't already, and keep it going after the
         /// fingers lift.
         case readHandsFree
+        /// Go on reading hands-free after a swipe that interrupted it.
+        /// Nothing new started, so nothing announces it.
+        case resumeHandsFree
     }
 
     /// Whether a touch holds to read: the Hold to Read setting, except while
@@ -66,14 +86,49 @@ nonisolated enum ReaderTouch {
         setting && !readsAloud
     }
 
+    /// What a touch that has moved sideways past the swipe distance becomes,
+    /// or nil when it stays what it is.
+    ///
+    /// A touch that hasn't done anything yet becomes a swipe. One that
+    /// landed on reading already under way becomes a swipe that reading
+    /// goes on after, and it can still turn into one after its hold has
+    /// taken the reading over, until it drags the speed. A hold that
+    /// started the reading itself keeps reading: lifting it pauses, and a
+    /// swipe steps from there.
+    static func swipe(
+        of mode: Mode,
+        in situation: Situation,
+        landedOnReading: Bool,
+        isAdjustingSpeed: Bool
+    ) -> Mode? {
+        guard !situation.showsCompletion else { return nil }
+        switch mode {
+        case .undecided:
+            guard landedOnReading, situation.isPlaying else { return .scrubbing }
+            return .scrubbingMidRead(handsFree: situation.isHandsFree)
+        case .reading:
+            guard landedOnReading, situation.isPlaying, !isAdjustingSpeed else { return nil }
+            return .scrubbingMidRead(handsFree: situation.isHandsFree)
+        case .scrubbing, .scrubbingMidRead, .twoFinger:
+            return nil
+        }
+    }
+
     /// What lifting the finger does.
     static func release(of mode: Mode, in situation: Situation) -> Outcome {
         guard mode != .twoFinger else { return .unchanged }
+        if case .scrubbingMidRead(let handsFree) = mode {
+            // Reading that started again some other way mid-swipe (the
+            // keyboard, VoiceOver) is left as it is.
+            guard !situation.showsCompletion, !situation.isPlaying else { return .unchanged }
+            if situation.isAtEnd { return .showCompletion }
+            return handsFree ? .resumeHandsFree : .play
+        }
         if situation.holdToRead {
             return situation.isPlaying ? .pause : .unchanged
         }
         // Tap to Read: a release without a horizontal swipe counts as a tap.
-        guard mode != .scrubbing, !situation.showsCompletion else { return .unchanged }
+        guard !mode.isScrubbing, !situation.showsCompletion else { return .unchanged }
         return tap(in: situation)
     }
 

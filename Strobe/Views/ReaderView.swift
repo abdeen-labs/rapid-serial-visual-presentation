@@ -9,8 +9,9 @@ import AppKit
 /// The RSVP reading interface — displays words one at a time.
 ///
 /// Gesture-driven: hold to play (or tap to toggle, when `holdToReadEnabled`
-/// is off or a voice reads aloud), release to pause, swipe to scrub, two
-/// fingers to read hands-free (see ``ReaderTouch``). Paused, a top bar holds
+/// is off or a voice reads aloud), release to pause, swipe to scrub (reading
+/// that no finger holds goes on afterwards), two fingers to read hands-free
+/// (see ``ReaderTouch``). Paused, a top bar holds
 /// Back, the title, Read Aloud, View Text, Settings, and the speed slider, and a
 /// bottom panel holds chapter navigation (when chapters exist) and the
 /// progress bar with the time left; both fade out while reading. With
@@ -57,6 +58,9 @@ struct ReaderView: View {
     @State private var isTouching = false
     @State private var scrubAccumulator: CGFloat = 0
     @State private var touchMode: ReaderTouch.Mode = .undecided
+    /// Whether words were already playing when the touch came down: reading
+    /// no finger holds, which a swipe steps through and then lets go on.
+    @State private var touchLandedOnReading = false
     @State private var pendingPlayWorkItem: DispatchWorkItem?
     /// Reading started by a second finger with Hold to Read on: it goes on
     /// with nothing touching the screen, until any pause.
@@ -578,20 +582,28 @@ struct ReaderView: View {
                 if !isTouching {
                     isTouching = true
                     touchMode = .undecided
+                    touchLandedOnReading = engine.isPlaying
                     scrubAccumulator = 0
                     if holdsToRead {
                         schedulePlayIntent()
                     }
                 }
 
-                if touchMode == .undecided {
-                    if horizontal > 20 {
-                        touchMode = .scrubbing
-                        cancelPlayIntent()
-                        if engine.isPlaying {
-                            engine.pause()
-                            HapticManager.shared.playPause()
-                        }
+                // A sideways swipe steps through the words. On reading the
+                // touch landed on (hands-free, Tap to Read, a voice), the
+                // reading goes on when the finger lifts.
+                if horizontal > 20,
+                   let swipe = ReaderTouch.swipe(
+                       of: touchMode,
+                       in: touchSituation,
+                       landedOnReading: touchLandedOnReading,
+                       isAdjustingSpeed: engine.wpmOverride != nil
+                   ) {
+                    touchMode = swipe
+                    cancelPlayIntent()
+                    if engine.isPlaying {
+                        engine.pause()
+                        HapticManager.shared.playPause()
                     }
                 }
 
@@ -618,7 +630,7 @@ struct ReaderView: View {
                     }
                 }
 
-                if touchMode == .scrubbing {
+                if touchMode.isScrubbing {
                     // Scrubbing is a paused-only interaction.
                     guard !engine.isPlaying else { return }
 
@@ -651,6 +663,7 @@ struct ReaderView: View {
         engine.wpmOverride = nil
         scrubAccumulator = 0
         touchMode = .undecided
+        touchLandedOnReading = false
     }
 
     /// A drag SwiftUI cancelled, which it does when a second finger lands
@@ -715,21 +728,26 @@ struct ReaderView: View {
         case .showCompletion:
             showCompletionOverlay()
         case .readHandsFree:
-            readHandsFree()
+            readHandsFree(announcing: true)
+        case .resumeHandsFree:
+            readHandsFree(announcing: false)
         }
     }
 
     /// Starts reading with nothing holding the screen, or lets a hold's
-    /// reading carry on that way, until a tap or any other pause.
-    private func readHandsFree() {
+    /// reading carry on that way, until a tap or any other pause. Reading
+    /// that goes on hands-free after a swipe through the words isn't
+    /// announced again: no note, and nothing for VoiceOver to say.
+    private func readHandsFree(announcing: Bool) {
         // pause() clears a hold's speed drag; reading on, it's cleared here.
         engine.wpmOverride = nil
         engine.play()
         // Nothing to read yet while the document loads.
         guard engine.isPlaying else { return }
         isHandsFree = true
-        handsFreeStarts += 1
         HapticManager.shared.playPause()
+        guard announcing else { return }
+        handsFreeStarts += 1
         #if os(iOS)
         AccessibilityNotification.Announcement("Reading hands-free. Tap to stop.").post()
         #endif

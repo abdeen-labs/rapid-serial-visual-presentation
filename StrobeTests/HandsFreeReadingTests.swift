@@ -16,7 +16,27 @@ struct HandsFreeReadingTests {
     private static let tapPlaying = Situation(holdToRead: false, isPlaying: true, isAtEnd: false)
     private static let tapAtLastWord = Situation(holdToRead: false, isPlaying: false, isAtEnd: true)
 
-    private static let allModes: [ReaderTouch.Mode] = [.undecided, .reading, .scrubbing, .twoFinger]
+    private static let allModes: [ReaderTouch.Mode] = [
+        .undecided, .reading, .scrubbing,
+        .scrubbingMidRead(handsFree: true), .scrubbingMidRead(handsFree: false),
+        .twoFinger,
+    ]
+
+    /// What a touch that moved sideways becomes, with the speed drag idle
+    /// unless a test says otherwise.
+    private static func swipe(
+        of mode: ReaderTouch.Mode,
+        in situation: Situation,
+        landedOnReading: Bool,
+        isAdjustingSpeed: Bool = false
+    ) -> ReaderTouch.Mode? {
+        ReaderTouch.swipe(
+            of: mode,
+            in: situation,
+            landedOnReading: landedOnReading,
+            isAdjustingSpeed: isAdjustingSpeed
+        )
+    }
 
     // MARK: - Second finger with Hold to Read
 
@@ -105,6 +125,83 @@ struct HandsFreeReadingTests {
         #expect(ReaderTouch.release(of: .undecided, in: finished) == .unchanged)
     }
 
+    // MARK: - Swiping through reading no finger holds
+
+    @Test func aSwipeWhilePausedStepsThroughWords() {
+        #expect(Self.swipe(of: .undecided, in: Self.holdPaused, landedOnReading: false) == .scrubbing)
+        #expect(Self.swipe(of: .undecided, in: Self.tapPaused, landedOnReading: false) == .scrubbing)
+    }
+
+    @Test func aSwipeOnHandsFreeReadingReadsOnAfterwards() {
+        #expect(Self.swipe(of: .undecided, in: Self.handsFree, landedOnReading: true)
+            == .scrubbingMidRead(handsFree: true))
+    }
+
+    @Test func aHoldThatTookOverHandsFreeReadingCanStillSwipe() {
+        // The finger rested on the screen before sliding back.
+        #expect(Self.swipe(of: .reading, in: Self.handsFree, landedOnReading: true)
+            == .scrubbingMidRead(handsFree: true))
+    }
+
+    @Test func aSwipeOnTapToReadReadsOnAfterwards() {
+        #expect(Self.swipe(of: .undecided, in: Self.tapPlaying, landedOnReading: true)
+            == .scrubbingMidRead(handsFree: false))
+    }
+
+    @Test func aSwipeOnReadingTheKeyboardStartedReadsOnWithoutGoingHandsFree() {
+        // Space started it with Hold to Read on: playing, but not hands-free.
+        #expect(Self.swipe(of: .undecided, in: Self.holding, landedOnReading: true)
+            == .scrubbingMidRead(handsFree: false))
+        #expect(Self.swipe(of: .reading, in: Self.holding, landedOnReading: true)
+            == .scrubbingMidRead(handsFree: false))
+    }
+
+    @Test func aHoldThatStartedTheReadingKeepsReadingThroughASidewaysDrag() {
+        #expect(Self.swipe(of: .reading, in: Self.holding, landedOnReading: false) == nil)
+    }
+
+    @Test func aSpeedDragNeverTurnsIntoASwipe() {
+        #expect(Self.swipe(of: .reading, in: Self.handsFree, landedOnReading: true, isAdjustingSpeed: true) == nil)
+    }
+
+    @Test func aSwipeStaysTheSwipeItIs() {
+        for mode in [ReaderTouch.Mode.scrubbing, .scrubbingMidRead(handsFree: true), .twoFinger] {
+            #expect(Self.swipe(of: mode, in: Self.holdPaused, landedOnReading: true) == nil)
+            #expect(Self.swipe(of: mode, in: Self.handsFree, landedOnReading: true) == nil)
+        }
+    }
+
+    @Test func nothingSwipesOverTheCompletionCard() {
+        var finished = Self.holdAtLastWord
+        finished.showsCompletion = true
+        #expect(Self.swipe(of: .undecided, in: finished, landedOnReading: false) == nil)
+    }
+
+    @Test func liftingASwipeThatInterruptedHandsFreeReadingGoesOnHandsFree() {
+        // The swipe paused the words, which ended hands-free reading.
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: true), in: Self.holdPaused) == .resumeHandsFree)
+    }
+
+    @Test func liftingASwipeThatInterruptedOtherReadingPlays() {
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: false), in: Self.tapPaused) == .play)
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: false), in: Self.holdPaused) == .play)
+    }
+
+    @Test func liftingASwipeThatReachedTheLastWordShowsCompletion() {
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: true), in: Self.holdAtLastWord) == .showCompletion)
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: false), in: Self.tapAtLastWord) == .showCompletion)
+    }
+
+    @Test func liftingASwipeLeavesReadingThatStartedAgainAlone() {
+        // Space or VoiceOver started the words again mid-swipe.
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: true), in: Self.holding) == .unchanged)
+        #expect(ReaderTouch.release(of: .scrubbingMidRead(handsFree: false), in: Self.tapPlaying) == .unchanged)
+    }
+
+    @Test func aSwipeWhilePausedStaysPausedWhenItLifts() {
+        #expect(ReaderTouch.release(of: .scrubbing, in: Self.holdPaused) == .unchanged)
+    }
+
     // MARK: - Cancellation
 
     @Test func countedFingersLeaveCancellationToCleanUpOnly() {
@@ -129,6 +226,9 @@ struct HandsFreeReadingTests {
         let inferred = ReaderTouch.SecondFingerDetection.inferredFromCancellation
         #expect(ReaderTouch.cancellation(of: .scrubbing, in: Self.holdPaused, detection: inferred) == .unchanged)
         #expect(ReaderTouch.cancellation(of: .scrubbing, in: Self.tapPaused, detection: inferred) == .unchanged)
+        // Nor one that interrupted reading: the words stay paused.
+        #expect(ReaderTouch.cancellation(of: .scrubbingMidRead(handsFree: true), in: Self.holdPaused, detection: inferred) == .unchanged)
+        #expect(ReaderTouch.cancellation(of: .scrubbingMidRead(handsFree: false), in: Self.tapPaused, detection: inferred) == .unchanged)
     }
 
     @Test func cancellationWithoutMultiTouchLetsGoOfAHold() {
