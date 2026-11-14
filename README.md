@@ -41,7 +41,7 @@
 
 Strobe uses **Rapid Serial Visual Presentation (RSVP)** to display words in sequence. Each word aligns on a highlighted letter, called the **Optimal Recognition Point**, at a fixed position on the screen.
 
-Set the pace from **100 to 1,000 words per minute** and adjust it while you read. The pace you set is how fast you read overall: pauses and slowdowns take their time from the other words, so the time left is the time it takes.
+Set the pace from **100 to 1,000 words per minute** and adjust it while you read. The pace you set is how fast you read overall: pauses and slowdowns take their time from the other words, so the time left is the time it takes. The [reading guides](https://strobefast.app/guides) on the website explain RSVP, the Optimal Recognition Point, and word timing in more detail.
 
 ## Built for focused reading
 
@@ -51,7 +51,7 @@ Press and hold anywhere on the screen to read, and lift your finger to stop. Sli
 
 ### Adjustable word timing
 
-Add time for long words and choose pause lengths for sentence ends, commas, dashes, ellipses, and closing quotes. Acronyms and hyphenated compounds receive extra time automatically. Complexity Timing speeds up simple words and slows down complex ones, with a slider for each. You can also add a blank interval between sentences.
+Add time for long words and choose pause lengths for sentence ends, commas, dashes, ellipses, and closing quotes. Acronyms and hyphenated compounds receive extra time automatically. Complexity Timing speeds up simple words and slows down complex ones, with a slider for each. You can also add a blank interval between sentences. Headings, list items, and paragraphs that end without a period pause like the end of a sentence.
 
 ### Listen as you read.
 
@@ -87,7 +87,7 @@ Import EPUB, PDF, plain-text, and Markdown files from Files or with drag and dro
 
 - **Share from anywhere.** Share an article from Safari, a link, or selected text from any app to Strobe, and it's waiting in your library without the page's menus and ads.
 - **Chapters at a glance.** EPUB tables of contents, PDF bookmarks, and Markdown headings become chapters, each with its reading time at your speed.
-- **Markdown as it reads.** Formatting marks, link addresses, code blocks, and front matter stay out of the way, and the words you'd see on the rendered page are what you read.
+- **Markdown as it reads.** Formatting marks, link addresses, code blocks, and front matter stay out of the way, and the words you'd see on the rendered page are what you read. Notes from Obsidian work too: a wiki link reads as its text.
 - **Clean text.** Page numbers, running headers, and footers are stripped on import.
 - **Not just English.** Chinese, Japanese, and Korean text is split into words automatically, and Arabic keeps its connected letterforms.
 
@@ -116,9 +116,9 @@ Strobe is free, with no subscription or in-app purchases. The source is availabl
 
 ## Under the hood
 
-Strobe is SwiftUI and SwiftData, with one package: [FluidAudio](https://github.com/FluidInference/FluidAudio), which runs the voice on Core ML.
+Strobe is SwiftUI and SwiftData, with two packages: [FluidAudio](https://github.com/FluidInference/FluidAudio), which runs the voice on Core ML, and [swift-cmark](https://github.com/swiftlang/swift-cmark), which parses Markdown.
 
-- **Import:** EPUBs are unzipped and read from their package manifest, with chapters from nested tables of contents and a DRM check up front. PDFs bring their bookmarks along.
+- **Import:** EPUBs are unzipped and read from their package manifest, with chapters from nested tables of contents and a DRM check up front. PDFs bring their bookmarks along. Markdown is parsed with cmark-gfm and read as the prose it renders to, with a chapter at each heading.
 - **Sharing:** a Share extension reads the article out of the Safari page you're on, or loads a shared link in an offscreen web view, and hands the text to the app through an App Group.
 - **Tokenizer:** rejoins words hyphenated across line breaks, splits words joined by em dashes, keeps `10:30 PM` and `44 B.C.` in one piece, and segments CJK text with `NLTokenizer`.
 - **Timing:** word length, punctuation, acronyms, compounds, and per-word complexity scores (computed once at import with the NaturalLanguage framework) all shape how long each word stays up. Each document's pace is worked out from its own words, so the speed you set is the speed you read.
@@ -139,7 +139,7 @@ Scripts/         Build-phase scripts
 
 ## Build it yourself
 
-1. Open `Strobe.xcodeproj` in Xcode 27. Xcode fetches the one package, FluidAudio, pinned to 0.17.7.
+1. Open `Strobe.xcodeproj` in Xcode 27. Xcode fetches the two packages, FluidAudio and swift-cmark, pinned to 0.17.7 and 0.9.0.
 2. Pick the **Strobe** scheme and an iPhone, iPad, or Mac to run on.
 3. To run on your own device or Mac, choose your team under **Signing & Capabilities** for the **Strobe**, **StrobeShare**, and **StrobeWidgetExtension** targets. App Group IDs and iCloud containers are unique across teams, so also replace `group.com.abdeen.strobe` in `SharedContainer.swift` and the three `.entitlements` files, and replace `iCloud.com.abdeen.strobe` in `CloudRecords.swift` and `Strobe.entitlements`.
 
