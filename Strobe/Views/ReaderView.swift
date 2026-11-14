@@ -263,6 +263,7 @@ struct ReaderView: View {
                             HandsFreeLabelView(
                                 engine: engine,
                                 start: handsFreeStarts,
+                                isHandsFree: isHandsFree,
                                 isDismissed: !isHandsFree || isTouching
                             )
                                 .offset(y: CGFloat(fontSize) * 1.4)
@@ -1022,10 +1023,14 @@ struct ReaderView: View {
                 .accessibilityHint("Return to the previous screen")
 
                 Button {
+                    // Back to the first word before the card leaves: the
+                    // word view that replaces it is made while the card's
+                    // animated change is applied, and one made before the
+                    // engine moved kept showing the last word.
+                    engine.restart()
                     withAnimation(.easeInOut(duration: 0.3)) {
                         showCompletion = false
                     }
-                    engine.restart()
                 } label: {
                     Label("Read Again", systemImage: "arrow.counterclockwise")
                         .frame(maxWidth: .infinity)
@@ -1339,6 +1344,10 @@ private struct HandsFreeLabelView: View {
     let engine: RSVPEngine
     /// Changes each time hands-free reading starts; 0 before the first.
     let start: Int
+    /// Whether reading is hands-free now. The note's task also runs when
+    /// this view comes back with the word after the finished card, long
+    /// after the last start.
+    let isHandsFree: Bool
     let isDismissed: Bool
     @State private var isVisible = false
 
@@ -1348,7 +1357,7 @@ private struct HandsFreeLabelView: View {
             .foregroundStyle(.secondary)
             .opacity(isVisible && engine.chapterAnnouncement == nil ? 1 : 0)
             .task(id: start) {
-                guard start > 0 else { return }
+                guard start > 0, isHandsFree else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { isVisible = true }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
