@@ -8,6 +8,7 @@ import SwiftData
 struct ChapterListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     let document: Document
 
     @FocusState private var pageFocused: Bool
@@ -20,15 +21,27 @@ struct ChapterListView: View {
         #endif
     }
 
+    /// A landscape iPhone: too short to stack the cover over the chapters
+    /// with the main button in view.
+    private var isCompactHeight: Bool {
+        #if os(iOS)
+        verticalSizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
     var body: some View {
         GeometryReader { geo in
-            if let spread = Self.spread(in: geo) {
-                // An open folding screen shows the book as a spread: the
-                // cover on the leading page and the chapters on the other.
+            if let spread = Self.spread(in: geo, isCompactHeight: isCompactHeight) {
+                // An open folding screen and a landscape phone show the book
+                // as a spread: the cover on the leading page and the
+                // chapters on the other.
                 HStack(spacing: 0) {
                     ScrollView {
                         header
-                            .padding(24)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, isCompactHeight ? 8 : 24)
                             .frame(maxWidth: .infinity, minHeight: geo.size.height)
                     }
                     .frame(width: spread.leadingWidth)
@@ -91,13 +104,21 @@ struct ChapterListView: View {
         var trailingWidth: CGFloat
     }
 
-    private static func spread(in geo: GeometryProxy) -> Spread? {
-        guard let fold = ScreenFold.crossing(geo, includeInactive: true), fold.runsDown else { return nil }
-        let spread = Spread(
-            leadingWidth: fold.frame.minX,
-            gap: fold.frame.width,
-            trailingWidth: geo.size.width - fold.frame.maxX
-        )
+    /// A landscape phone has no fold, and its two pages are its two halves.
+    private static func spread(in geo: GeometryProxy, isCompactHeight: Bool) -> Spread? {
+        let spread: Spread
+        if let fold = ScreenFold.crossing(geo, includeInactive: true), fold.runsDown {
+            spread = Spread(
+                leadingWidth: fold.frame.minX,
+                gap: fold.frame.width,
+                trailingWidth: geo.size.width - fold.frame.maxX
+            )
+        } else if isCompactHeight {
+            let half = (geo.size.width / 2).rounded(.down)
+            spread = Spread(leadingWidth: half, gap: 0, trailingWidth: geo.size.width - half)
+        } else {
+            return nil
+        }
         guard spread.leadingWidth >= 300, spread.trailingWidth >= 300 else { return nil }
         return spread
     }
@@ -109,7 +130,9 @@ struct ChapterListView: View {
 
         return VStack(spacing: 0) {
             DocumentCover(document: document)
-                .frame(width: isRegularWidth ? 150 : 128)
+                // Small enough on a landscape phone that the main button
+                // shows without scrolling.
+                .frame(width: isCompactHeight ? 88 : (isRegularWidth ? 150 : 128))
                 .padding(.top, 8)
 
             Text(document.title)

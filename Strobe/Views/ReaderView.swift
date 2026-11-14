@@ -26,6 +26,7 @@ struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
     @AppStorage(ReaderSettings.Keys.smartTimingEnabled) private var smartTimingEnabled: Bool = ReaderSettings.Defaults.smartTimingEnabled
@@ -110,12 +111,27 @@ struct ReaderView: View {
     }
 
     /// On iPad and Mac the bottom panel keeps to a comfortable column so its
-    /// sliders don't stretch the full width of a 13" display.
+    /// sliders don't stretch the full width of a 13" display. A landscape
+    /// iPhone uses its width: its bars put side by side what they stack
+    /// elsewhere.
     private var controlsMaxWidth: CGFloat {
         #if os(macOS)
         560
         #else
-        horizontalSizeClass == .regular ? 560 : .infinity
+        horizontalSizeClass == .regular && !isCompactHeight ? 560 : .infinity
+        #endif
+    }
+
+    /// A landscape iPhone, too short for the bars as they stack in
+    /// portrait: the word would run into them, and they would leave the
+    /// gestures a thin strip. There each bar takes fewer rows: the speed's
+    /// label and value share its slider's row, the chapters and the progress
+    /// share another, and the hint goes.
+    private var isCompactHeight: Bool {
+        #if os(iOS)
+        verticalSizeClass == .compact
+        #else
+        false
         #endif
     }
 
@@ -818,7 +834,7 @@ struct ReaderView: View {
             navigationRow
             speedControl
                 .padding(.horizontal, 24)
-                .padding(.top, 16)
+                .padding(.top, isCompactHeight ? 4 : 16)
                 .constrainedAndCentered(maxWidth: controlsMaxWidth)
         }
         .opacity(engine.isPlaying ? 0.0 : 1.0)
@@ -873,59 +889,84 @@ struct ReaderView: View {
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        VStack(spacing: 0) {
-            if !document.chapters.isEmpty {
-                ChapterNavigationView(
-                    chapters: document.chapters,
+        // One layout either way, so turning the phone keeps the chapter
+        // picker and a press on the progress bar where they are.
+        let rows = isCompactHeight
+            ? AnyLayout(HStackLayout(spacing: 20))
+            : AnyLayout(VStackLayout(spacing: 0))
+
+        return VStack(spacing: 0) {
+            rows {
+                if !document.chapters.isEmpty {
+                    ChapterNavigationView(
+                        chapters: document.chapters,
+                        engine: engine,
+                        wordsPerMinute: displayedWPM,
+                        furthestWordIndex: document.displayedFurthestWordIndex,
+                        showChapterPicker: $showChapterPicker
+                    ) {
+                        if showCompletion {
+                            withAnimation { showCompletion = false }
+                        }
+                    }
+                    .frame(maxWidth: isCompactHeight ? 320 : .infinity)
+                    .padding(.bottom, isCompactHeight ? 0 : 22)
+                }
+
+                ReaderProgressView(
                     engine: engine,
                     wordsPerMinute: displayedWPM,
-                    furthestWordIndex: document.displayedFurthestWordIndex,
-                    showChapterPicker: $showChapterPicker
-                ) {
-                    if showCompletion {
-                        withAnimation { showCompletion = false }
-                    }
-                }
-                .padding(.bottom, 22)
+                    showCompletion: $showCompletion
+                )
             }
 
-            ReaderProgressView(
-                engine: engine,
-                wordsPerMinute: displayedWPM,
-                showCompletion: $showCompletion
-            )
-
-            Text(hintText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                #if os(iOS)
-                .multilineTextAlignment(.center)
-                // Hold to Read's hint takes two lines, kept while the
-                // completion card hides it so nothing above it moves.
-                .lineLimit(2, reservesSpace: holdToReadEnabled)
-                #endif
-                .opacity(showCompletion ? 0 : 1)
-                .padding(.top, 20)
+            if !isCompactHeight {
+                Text(hintText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    #if os(iOS)
+                    .multilineTextAlignment(.center)
+                    // Hold to Read's hint takes two lines, kept while the
+                    // completion card hides it so nothing above it moves.
+                    .lineLimit(2, reservesSpace: holdToReadEnabled)
+                    #endif
+                    .opacity(showCompletion ? 0 : 1)
+                    .padding(.top, 20)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 12)
         .constrainedAndCentered(maxWidth: controlsMaxWidth)
     }
 
-    /// The reading speed: the value over a slider from slow to fast. Neutral,
-    /// so the red stays with the progress bar and the word.
+    /// The reading speed: the value over a slider from slow to fast, or
+    /// beside it on a short screen. Neutral, so the red stays with the
+    /// progress bar and the word.
     private var speedControl: some View {
-        VStack(spacing: 2) {
+        let rows = isCompactHeight
+            ? AnyLayout(HStackLayout(spacing: 16))
+            : AnyLayout(VStackLayout(spacing: 2))
+
+        return rows {
             HStack(alignment: .firstTextBaseline) {
                 Text("Speed")
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
-                Text("\(displayedWPM) wpm")
+                // Sized for the widest speed, so the slider beside it holds
+                // still as the digits change under a drag.
+                Text("\(Int(ReaderSettings.wpmRange.upperBound)) wpm")
+                    .hidden()
+                    .overlay(alignment: .trailing) {
+                        Text("\(displayedWPM) wpm")
+                            .foregroundStyle(.primary)
+                            .fixedSize()
+                    }
                     .fontWeight(.semibold)
-                    .foregroundStyle(.primary)
                     .monospacedDigit()
             }
             .font(StrobeTheme.metadataFont)
+            // Beside the slider, only as wide as its text.
+            .fixedSize(horizontal: isCompactHeight, vertical: false)
             .accessibilityHidden(true)
 
             // Continuous, rounding to steps itself: a stepped slider marks
@@ -987,22 +1028,35 @@ struct ReaderView: View {
     /// The end of the document, laid out like its book page: the cover, the
     /// title, and what to do next.
     private var completionView: some View {
-        VStack(spacing: 0) {
+        // On a short screen the cover sits beside the rest, which wouldn't
+        // fit between the bars under it.
+        let sides = isCompactHeight
+            ? AnyLayout(HStackLayout(spacing: 28))
+            : AnyLayout(VStackLayout(spacing: 0))
+
+        return sides {
             DocumentCover(document: document)
                 .frame(width: 84)
                 .scaleEffect(reduceMotion ? 1 : (showCompletion ? 1 : 0.8))
                 .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.7), value: showCompletion)
                 .accessibilityHidden(true)
 
+            completionDetails
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private var completionDetails: some View {
+        VStack(alignment: isCompactHeight ? .leading : .center, spacing: 0) {
             Text("Finished")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(StrobeTheme.accent)
-                .padding(.top, 20)
+                .padding(.top, isCompactHeight ? 0 : 20)
 
             Text(document.title)
                 .font(StrobeTheme.displayFont(size: 26, relativeTo: .title))
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
+                .multilineTextAlignment(isCompactHeight ? .leading : .center)
+                .lineLimit(isCompactHeight ? 2 : 3)
                 .padding(.top, 4)
                 .accessibilityAddTraits(.isHeader)
 
@@ -1042,9 +1096,8 @@ struct ReaderView: View {
             .buttonBorderShape(.capsule)
             .controlSize(.large)
             .frame(maxWidth: 400)
-            .padding(.top, 24)
+            .padding(.top, isCompactHeight ? 16 : 24)
         }
-        .padding(.horizontal, 24)
     }
 
     // MARK: - Hint text
