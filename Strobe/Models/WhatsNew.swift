@@ -27,6 +27,8 @@ nonisolated enum WhatsNew {
         /// Reading aloud runs here and goes on in the background
         /// (`KokoroVoiceModel.rendersInBackground`).
         case readAloudInBackground
+        /// An iPhone or iPad rather than a Mac.
+        case iOSDevice
     }
 
     struct Release: Hashable, Sendable, Identifiable {
@@ -48,6 +50,19 @@ nonisolated enum WhatsNew {
 
     /// Every release, newest first.
     static let releases: [Release] = [
+        Release(version: "3.6", items: [
+            Item(
+                symbol: "iphone.landscape",
+                title: "Landscape on iPhone",
+                detail: "Turn your iPhone on its side to read. The reader, the book page, and the finished page fit the wider screen, with room for larger words.",
+                requirement: .iOSDevice
+            ),
+            Item(
+                symbol: "arrow.uturn.backward",
+                title: "Slide Back to Reread",
+                detail: "While the words play on their own, hands-free, with Tap to Read, or with the voice, slide back across the reader to go over them again. Reading goes on when you let go."
+            ),
+        ]),
         Release(version: "3.5", items: [
             Item(
                 symbol: "doc.text",

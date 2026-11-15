@@ -93,7 +93,16 @@ extension WhatsNew.Requirement {
         switch self {
         case .readAloud: KokoroVoiceModel.isSupported
         case .readAloudInBackground: KokoroVoiceModel.isSupported && KokoroVoiceModel.rendersInBackground
+        case .iOSDevice: Self.isiOSDevice
         }
+    }
+
+    nonisolated private static var isiOSDevice: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
     }
 }
 
