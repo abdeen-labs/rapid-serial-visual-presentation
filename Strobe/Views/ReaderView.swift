@@ -50,6 +50,9 @@ struct ReaderView: View {
     @AppStorage(ReaderSettings.Keys.contextWordsOpacity) private var contextWordsOpacity: Double = ReaderSettings.Defaults.contextWordsOpacity
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
     @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
+    @AppStorage(ReaderSettings.Keys.speedRampEnabled) private var speedRampEnabled: Bool = ReaderSettings.Defaults.speedRampEnabled
+    @AppStorage(ReaderSettings.Keys.speedRampStart) private var speedRampStart: Double = ReaderSettings.Defaults.speedRampStart
+    @AppStorage(ReaderSettings.Keys.speedRampMinutes) private var speedRampMinutes: Double = ReaderSettings.Defaults.speedRampMinutes
     @AppStorage(ReaderSettings.Keys.keepScreenAwakeEnabled) private var keepScreenAwakeEnabled: Bool = ReaderSettings.Defaults.keepScreenAwakeEnabled
     @AppStorage(ReaderSettings.Keys.readAloudEnabled) private var readAloudEnabled: Bool = ReaderSettings.Defaults.readAloudEnabled
     @AppStorage(ReaderSettings.Keys.readAloudVoice) private var readAloudVoice: String = ReaderSettings.Defaults.readAloudVoice
@@ -111,6 +114,15 @@ struct ReaderView: View {
         )
     }
 
+    /// The three speed ramp settings as the single value the engine takes.
+    private var speedRamp: SpeedRamp {
+        SpeedRamp(
+            isEnabled: speedRampEnabled,
+            startFraction: speedRampStart,
+            duration: speedRampMinutes * 60
+        )
+    }
+
     /// On iPad and Mac the bottom panel keeps to a comfortable column so its
     /// sliders don't stretch the full width of a 13" display. A landscape
     /// iPhone uses its width: its bars put side by side what they stack
@@ -158,7 +170,8 @@ struct ReaderView: View {
             sentenceBreakLength: timing.sentenceBreakLength,
             complexityTimingEnabled: timing.complexityTimingEnabled,
             complexitySpeedUpIntensity: timing.complexitySpeedUpIntensity,
-            complexitySlowDownIntensity: timing.complexitySlowDownIntensity
+            complexitySlowDownIntensity: timing.complexitySlowDownIntensity,
+            speedRamp: ReaderSettings.speedRamp()
         ))
         self._wpmSliderValue = State(initialValue: Double(document.wordsPerMinute))
         self._sessionRecorder = State(initialValue: ReadingSessionRecorder(documentID: document.id))
@@ -509,6 +522,9 @@ struct ReaderView: View {
         }
         .onChange(of: sentenceBreakLength) { _, newValue in
             engine.sentenceBreakLength = newValue
+        }
+        .onChange(of: speedRamp) { _, newValue in
+            engine.speedRamp = newValue
         }
         .alert("Save Error", isPresented: .init(isPresent: $persistenceError)) {
             Button("OK") { persistenceError = nil }

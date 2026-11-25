@@ -8,7 +8,8 @@ import Foundation
 /// compound such as `wedge-shaped` and an acronym such as `FBI` always display
 /// for longer than a single word; see ``CompoundWord`` and ``Acronym``. With
 /// sentence breaks on, a blank screen follows each sentence's last word; see
-/// ``SentenceBreak``.
+/// ``SentenceBreak``. With the speed ramp on, a reading session starts below
+/// the speed and works up to it; see ``SpeedRamp``.
 ///
 /// With a ``pacer`` set, as while reading aloud, the pacer moves playback
 /// from word to word instead of the timer, and the per-word timing settings
@@ -132,10 +133,37 @@ final class RSVPEngine {
     }
 
     /// The speed playback actually runs at: the hold override if one is
-    /// active, otherwise the configured speed, held to ``speedCap``.
+    /// active, otherwise the configured speed, held to ``speedCap``. The
+    /// speed ramp isn't counted: this is the speed it works up to.
     var effectiveWordsPerMinute: Int {
         min(wpmOverride ?? wordsPerMinute, speedCap ?? .max)
     }
+
+    /// How a reading session works up to the speed. The timer runs every
+    /// word, and the blanks after sentences, at its share of
+    /// ``effectiveWordsPerMinute`` for the time played so far
+    /// (``rampElapsed``). A ``pacer`` reads at the speed itself.
+    var speedRamp: SpeedRamp {
+        didSet { onPlaybackSettingChanged() }
+    }
+
+    /// The time words have played this reading session, pauses left out
+    /// and chapter titles and sentence breaks included: what the timer's
+    /// deadlines stood for, or the times a ``pacer`` gave its words. It
+    /// starts over when playing follows a pause longer than
+    /// ``SpeedRamp/sessionPause``. It counts whether or not the ramp is on,
+    /// so turning the ramp on mid-session doesn't slow the words. Not
+    /// observed: each word reads it as it's timed.
+    @ObservationIgnored private(set) var rampElapsed: TimeInterval = 0
+
+    /// When playback last paused, until it plays again.
+    @ObservationIgnored private var pausedAt: Date?
+
+    /// The clock pauses are measured by. Tests replace it.
+    @ObservationIgnored var currentDate: () -> Date = { .now }
+
+    /// The time the timer's current deadline stands for.
+    @ObservationIgnored private var scheduledInterval: TimeInterval = 0
 
     /// When enabled, longer words are displayed for proportionally more time.
     var smartTimingEnabled: Bool {
@@ -240,10 +268,12 @@ final class RSVPEngine {
     private(set) var scheduledDeadline: DispatchTime?
 
     /// A plain word's time: the speed's share of a minute, shortened by the
-    /// pace factor so the time the timing settings add evens out.
+    /// pace factor so the time the timing settings add evens out, and
+    /// lengthened while the speed ramp works up to the speed.
     private var baseInterval: TimeInterval {
         let factor = paceFactor.isFinite && paceFactor > 0 ? paceFactor : 1
-        return 60.0 / (Double(max(1, effectiveWordsPerMinute)) * factor)
+        let speed = Double(max(1, effectiveWordsPerMinute)) * speedRamp.speedFraction(after: rampElapsed)
+        return 60.0 / (speed * factor)
     }
 
     init(
@@ -261,6 +291,7 @@ final class RSVPEngine {
         complexityTimingEnabled: Bool = false,
         complexitySpeedUpIntensity: Double = 0.5,
         complexitySlowDownIntensity: Double = 0.5,
+        speedRamp: SpeedRamp = SpeedRamp(),
         complexityScores: [Float]? = nil,
         chapters: [Chapter] = []
     ) {
@@ -278,6 +309,7 @@ final class RSVPEngine {
         self.complexityTimingEnabled = complexityTimingEnabled
         self.complexitySpeedUpIntensity = complexitySpeedUpIntensity
         self.complexitySlowDownIntensity = complexitySlowDownIntensity
+        self.speedRamp = speedRamp
         self.complexityScores = complexityScores
         setChapters(chapters)
     }
@@ -335,6 +367,11 @@ final class RSVPEngine {
     /// instead of announcing a chapter or timing the word.
     func play() {
         guard !isPlaying, !words.isEmpty, !isAtEnd else { return }
+        // Reading after a long pause is a new session, which ramps up again.
+        if let pausedAt, currentDate().timeIntervalSince(pausedAt) > SpeedRamp.sessionPause {
+            rampElapsed = 0
+        }
+        pausedAt = nil
         isPlaying = true
         if let pacer {
             currentWordInterval = nil
@@ -369,6 +406,7 @@ final class RSVPEngine {
     /// the configured speed. Pausing during a chapter announcement moves the
     /// position past the words its title stands in for.
     func pause() {
+        if isPlaying { pausedAt = currentDate() }
         isPlaying = false
         stopTimer()
         pacer?.stop()
@@ -467,6 +505,7 @@ final class RSVPEngine {
         let now = DispatchTime.now()
         let deadline = max((anchor ?? now) + interval, now)
         scheduledDeadline = deadline
+        scheduledInterval = interval
         timerSource?.schedule(deadline: deadline)
     }
 
@@ -476,12 +515,15 @@ final class RSVPEngine {
         source.cancel()
         timerSource = nil
         scheduledDeadline = nil
+        scheduledInterval = 0
     }
 
     /// Handles one timer deadline. Internal so phase transitions can be
     /// exercised deterministically without wall-clock sleeps in tests.
     func advance() {
         guard isPlaying else { return }
+        // The deadline's time has played.
+        rampElapsed += scheduledInterval
         if let chapter = chapterAnnouncement {
             if isChapterTitleVisible {
                 isChapterTitleVisible = false
@@ -524,6 +566,7 @@ final class RSVPEngine {
             guard words.indices.contains(index), index >= currentIndex else { return }
             movePaced(to: index)
             currentWordInterval = interval
+            rampElapsed += interval ?? 0
             chapterAnnouncement = nil
             isChapterTitleVisible = false
             isInSentenceBreak = false

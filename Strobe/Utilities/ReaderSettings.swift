@@ -40,6 +40,11 @@ enum ReaderSettings {
         nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
         nonisolated static let wordPopEnabled = "wordPopEnabled"
         nonisolated static let keepScreenAwakeEnabled = "keepScreenAwakeEnabled"
+        nonisolated static let speedRampEnabled = "speedRampEnabled"
+        /// The share of the speed a reading session starts at; see `SpeedRamp`.
+        nonisolated static let speedRampStart = "speedRampStart"
+        /// The minutes of playing until words run at the speed.
+        nonisolated static let speedRampMinutes = "speedRampMinutes"
         nonisolated static let readAloudEnabled = "readAloudEnabled"
         nonisolated static let readAloudVoice = "readAloudVoice"
         nonisolated static let iCloudSyncEnabled = "iCloudSyncEnabled"
@@ -102,6 +107,9 @@ enum ReaderSettings {
         nonisolated static let enclosingMarksOpacity = ReaderTextTone.fadedLevel
         nonisolated static let wordPopEnabled = false
         nonisolated static let keepScreenAwakeEnabled = true
+        nonisolated static let speedRampEnabled = false
+        nonisolated static let speedRampStart = 0.8
+        nonisolated static let speedRampMinutes = 3.0
         nonisolated static let readAloudEnabled = false
         /// A Kokoro voice name: ``KokoroVoices/defaultVoice``. A stored
         /// name the catalog doesn't offer, such as a voice identifier from
@@ -173,6 +181,19 @@ enum ReaderSettings {
                 ?? Defaults.sentenceBreakEnabled,
             sentenceBreakLength: defaults.object(forKey: Keys.sentenceBreakLength) as? Double
                 ?? Defaults.sentenceBreakLength
+        )
+    }
+
+    /// Reads the current speed ramp settings for constructing an
+    /// ``RSVPEngine``.
+    nonisolated static func speedRamp(from defaults: UserDefaults = .standard) -> SpeedRamp {
+        SpeedRamp(
+            isEnabled: defaults.object(forKey: Keys.speedRampEnabled) as? Bool
+                ?? Defaults.speedRampEnabled,
+            startFraction: defaults.object(forKey: Keys.speedRampStart) as? Double
+                ?? Defaults.speedRampStart,
+            duration: (defaults.object(forKey: Keys.speedRampMinutes) as? Double
+                ?? Defaults.speedRampMinutes) * 60
         )
     }
 

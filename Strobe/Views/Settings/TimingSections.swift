@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Per-word timing: smart timing by length, punctuation pauses, the blank
-/// after sentences, and complexity timing. Each feature's fine-tuning shows
-/// only while it's on.
+/// after sentences, and complexity timing, and then the speed ramp at the
+/// start of a session. Each feature's fine-tuning shows only while it's on.
 struct TimingSections: View {
     @AppStorage(ReaderSettings.Keys.smartTimingEnabled) private var smartTimingEnabled: Bool = ReaderSettings.Defaults.smartTimingEnabled
     @AppStorage(ReaderSettings.Keys.smartTimingPercentPerLetter) private var smartTimingPercentPerLetter: Double = ReaderSettings.Defaults.smartTimingPercentPerLetter
@@ -18,6 +18,9 @@ struct TimingSections: View {
     @AppStorage(ReaderSettings.Keys.complexityTimingEnabled) private var complexityTimingEnabled: Bool = ReaderSettings.Defaults.complexityTimingEnabled
     @AppStorage(ReaderSettings.Keys.complexitySpeedUpIntensity) private var complexitySpeedUpIntensity: Double = ReaderSettings.Defaults.complexitySpeedUpIntensity
     @AppStorage(ReaderSettings.Keys.complexitySlowDownIntensity) private var complexitySlowDownIntensity: Double = ReaderSettings.Defaults.complexitySlowDownIntensity
+    @AppStorage(ReaderSettings.Keys.speedRampEnabled) private var speedRampEnabled: Bool = ReaderSettings.Defaults.speedRampEnabled
+    @AppStorage(ReaderSettings.Keys.speedRampStart) private var speedRampStart: Double = ReaderSettings.Defaults.speedRampStart
+    @AppStorage(ReaderSettings.Keys.speedRampMinutes) private var speedRampMinutes: Double = ReaderSettings.Defaults.speedRampMinutes
 
     /// The punctuation types with their own pause multiplier.
     private enum PauseType: CaseIterable, Identifiable {
@@ -186,6 +189,33 @@ struct TimingSections: View {
         } footer: {
             if complexityTimingEnabled {
                 Text("Speeds up simple, common words and slows down complex, rare ones. Higher means a bigger change.")
+            }
+        }
+
+        Section {
+            Toggle(isOn: $speedRampEnabled.animation()) {
+                Text("Ramp Up to Speed")
+                Text("Each reading session starts slower")
+            }
+            if speedRampEnabled {
+                SettingsSliderRow(
+                    "Starting Speed",
+                    value: "\(Int((speedRampStart * 100).rounded()))%",
+                    accessibilityValue: "\(Int((speedRampStart * 100).rounded())) percent",
+                    sliderValue: $speedRampStart,
+                    in: SpeedRamp.startRange,
+                    step: 0.05
+                )
+                SettingsSliderRow(
+                    "Full Speed After",
+                    value: "\(Int(speedRampMinutes.rounded())) min",
+                    accessibilityValue: speedRampMinutes.rounded() == 1
+                        ? "1 minute"
+                        : "\(Int(speedRampMinutes.rounded())) minutes",
+                    sliderValue: $speedRampMinutes,
+                    in: SpeedRamp.minutesRange,
+                    step: 1
+                )
             }
         }
     }
