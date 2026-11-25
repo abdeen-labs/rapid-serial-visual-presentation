@@ -50,6 +50,33 @@ nonisolated enum WhatsNew {
 
     /// Every release, newest first.
     static let releases: [Release] = [
+        Release(version: "3.7", items: [
+            Item(
+                symbol: "arrow.uturn.backward",
+                title: "Reread a Sentence",
+                detail: "Paused, the new button beside the progress bar goes back to the start of the sentence. Press it again to step back a sentence at a time. With a keyboard, it's Option-Left."
+            ),
+            Item(
+                symbol: "character.book.closed",
+                title: "Look Up a Word",
+                detail: "Pause on a word and use Look Up, at the top of the reader, to see it in the dictionary."
+            ),
+            Item(
+                symbol: "sun.max",
+                title: "Screen Stays Awake",
+                detail: "The screen no longer dims or locks while words play, and locks as usual once you pause. Keep Screen Awake is in Settings, under Controls."
+            ),
+            Item(
+                symbol: "gauge.with.dots.needle.33percent",
+                title: "Ramp Up to Speed",
+                detail: "Start each reading session slower and work up to your speed over a few minutes. Turn it on in Settings, under Timing."
+            ),
+            Item(
+                symbol: "text.cursor",
+                title: "Your Guide Line",
+                detail: "Make the line at the highlighted letter stronger, thicker, or fainter, or switch it to ticks above and below the word. It's in Settings, under While Reading."
+            ),
+        ]),
         Release(version: "3.6", items: [
             Item(
                 symbol: "iphone.landscape",
