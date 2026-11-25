@@ -12,7 +12,7 @@ import AppKit
 /// is off or a voice reads aloud), release to pause, swipe to scrub (reading
 /// that no finger holds goes on afterwards), two fingers to read hands-free
 /// (see ``ReaderTouch``). Paused, a top bar holds
-/// Back, the title, Read Aloud, View Text, Settings, and the speed slider, and a
+/// Back, the title, Read Aloud, Look Up, View Text, Settings, and the speed slider, and a
 /// bottom panel holds chapter navigation (when chapters exist) and the
 /// progress bar with the time left; both fade out while reading. With
 /// reading aloud on, a voice paces the words (``ReadAloudController``).
@@ -86,6 +86,8 @@ struct ReaderView: View {
     @State private var showPassage = false
     #if os(iOS)
     @State private var showSettings = false
+    /// The word the dictionary sheet shows (``DictionaryLookup``).
+    @State private var lookUpTerm: DictionaryLookup.Term?
     #elseif os(macOS)
     @Environment(\.openSettings) private var openSettings
     #endif
@@ -544,6 +546,11 @@ struct ReaderView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        .sheet(item: $lookUpTerm) { term in
+            DictionaryLookupSheet(term: term.text)
+                .ignoresSafeArea()
+                .presentationDetents([.medium, .large])
+        }
         #elseif os(macOS)
         .sheet(isPresented: $showPassage) {
             PassageView(document: document, engine: engine)
@@ -603,7 +610,7 @@ struct ReaderView: View {
     /// keyboard focus when the last one closes.
     private var isPresentingOverlay: Bool {
         #if os(iOS)
-        if showSettings { return true }
+        if showSettings || lookUpTerm != nil { return true }
         #endif
         return showPassage || showChapterPicker || persistenceError != nil || readAloudPrompt != nil
     }
@@ -845,8 +852,8 @@ struct ReaderView: View {
 
     // MARK: - Top bar
 
-    /// Back, the title, Read Aloud, View Text, and Settings, laid out like a
-    /// navigation bar, over the speed. Speed sits up here rather than in
+    /// Back, the title, Read Aloud, Look Up, View Text, and Settings, laid
+    /// out like a navigation bar, over the speed. Speed sits up here rather than in
     /// the bottom panel so the two bars stay about the same height: the
     /// word's line has to clear both on the smallest screens, and the marks
     /// above the word get the room to the nearer bar.
@@ -887,6 +894,16 @@ struct ReaderView: View {
                 ReadAloudButton(controller: readAloud, isEnabled: readAloudEnabled) { tap in
                     readAloudButtonTapped(tap)
                 }
+            }
+
+            // The word showing, in the system dictionary: a sheet on iOS,
+            // the Dictionary app on macOS.
+            LookUpButton(engine: engine, showsWord: !showCompletion) { term in
+                #if os(iOS)
+                lookUpTerm = DictionaryLookup.Term(text: term)
+                #elseif os(macOS)
+                DictionaryLookup.open(term)
+                #endif
             }
 
             ReaderGlassButton(systemImage: "text.alignleft", accessibilityLabel: "View Text") {
