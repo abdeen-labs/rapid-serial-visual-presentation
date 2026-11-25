@@ -168,12 +168,17 @@ struct WordView: View, Equatable {
     /// Builds an `AttributedString` with the anchor letter in `anchorColor`.
     /// For non-Arabic scripts the anchor is also bolded. For Arabic, only
     /// color is changed to avoid breaking cursive glyph connections.
-    private func attributedWord(fontSize: CGFloat, parts: WordParts, anchorColor: Color) -> AttributedString {
+    private func attributedWord(
+        font: ReaderFont,
+        fontSize: CGFloat,
+        parts: WordParts,
+        anchorColor: Color
+    ) -> AttributedString {
         var attributed = AttributedString(word)
         // The reader's font size is user-controlled via a slider, so we opt out
         // of Dynamic Type scaling here — otherwise accessibility sizes would
         // compound with the chosen size and overflow the fitted layout.
-        attributed.font = readerFont.regularFont(size: fontSize, relativeTo: nil)
+        attributed.font = font.regularFont(size: fontSize, relativeTo: nil)
         attributed.foregroundColor = textTone.textColor
 
         guard parts.redIndex < word.count else { return attributed }
@@ -185,7 +190,7 @@ struct WordView: View, Equatable {
             attributed[attrStart..<attrEnd].foregroundColor = anchorColor
             // Bold breaks Arabic cursive shaping — only apply for non-Arabic.
             if !parts.isArabic {
-                attributed[attrStart..<attrEnd].font = readerFont.boldFont(size: fontSize, relativeTo: nil)
+                attributed[attrStart..<attrEnd].font = font.boldFont(size: fontSize, relativeTo: nil)
             }
         }
 
@@ -213,12 +218,14 @@ struct WordView: View, Equatable {
         let anchorColor = textTone.anchorColor(for: highlightColor)
         // Read here, not in the geometry reader's closure: a setting only
         // read in there doesn't redraw the word when it changes, and a
-        // paused reader kept the old guide line until the next word.
+        // paused reader kept the old font or guide line until the next
+        // word, as did the preview in Settings.
+        let font = readerFont
         let guideLineStyle = GuideLine.Style.resolve(guideLineStyleSelection)
         let guideLineOpacity = self.guideLineOpacity
         let guideLineWidth = CGFloat(self.guideLineWidth)
         GeometryReader { geo in
-            let metrics = layoutMetrics(for: geo.size.width, parts: parts)
+            let metrics = layoutMetrics(for: geo.size.width, parts: parts, font: font)
 
             ZStack {
                 ZStack {
@@ -234,7 +241,7 @@ struct WordView: View, Equatable {
 
                     let gap = metrics.fontSize * Self.contextGapRatio
 
-                    Text(attributedWord(fontSize: metrics.fontSize, parts: parts, anchorColor: anchorColor))
+                    Text(attributedWord(font: font, fontSize: metrics.fontSize, parts: parts, anchorColor: anchorColor))
                         // Before the overlays, so the neighbours hold still
                         // while the word pops.
                         .modifier(WordPopEffect(cue: pop, anchor: metrics.popAnchor))
@@ -243,12 +250,12 @@ struct WordView: View, Equatable {
                         // views: an alignment guide inside an `if` is dropped.
                         .overlay(alignment: .leadingFirstTextBaseline) {
                             contextWord(contextIsRightToLeft ? context?.next : context?.previous,
-                                        fontSize: metrics.fontSize)
+                                        font: font, fontSize: metrics.fontSize)
                                 .alignmentGuide(.leading) { $0.width + gap }
                         }
                         .overlay(alignment: .trailingFirstTextBaseline) {
                             contextWord(contextIsRightToLeft ? context?.previous : context?.next,
-                                        fontSize: metrics.fontSize)
+                                        font: font, fontSize: metrics.fontSize)
                                 .alignmentGuide(.trailing) { _ in -gap }
                         }
                         .offset(x: metrics.anchorOffset)
@@ -268,9 +275,9 @@ struct WordView: View, Equatable {
     /// and the tone's text color at the context words' opacity; empty when
     /// there is none. Never proposed a width, so a long neighbour
     /// runs past the screen edge rather than shrinking.
-    private func contextWord(_ text: String?, fontSize: CGFloat) -> some View {
+    private func contextWord(_ text: String?, font: ReaderFont, fontSize: CGFloat) -> some View {
         Text(text ?? "")
-            .font(readerFont.regularFont(size: fontSize, relativeTo: nil))
+            .font(font.regularFont(size: fontSize, relativeTo: nil))
             .foregroundStyle(textTone.textColor)
             .opacity(ContextWords.opacity(isPlaying: contextIsPlaying, level: contextOpacityLevel, tone: textTone))
             .fixedSize()
@@ -291,7 +298,7 @@ struct WordView: View, Equatable {
     /// enough, because the centering offset shifts the wider (usually
     /// trailing) half toward the edge. The offset is then clamped so the
     /// shifted word can never extend past the view bounds.
-    private func layoutMetrics(for availableWidth: CGFloat, parts: WordParts) -> LayoutMetrics {
+    private func layoutMetrics(for availableWidth: CGFloat, parts: WordParts, font: ReaderFont) -> LayoutMetrics {
         let textAreaWidth = availableWidth - 2 * Self.horizontalTextMargin
         guard textAreaWidth > 0, !word.isEmpty else {
             return LayoutMetrics(fontSize: fontSize, anchorOffset: 0)
@@ -299,9 +306,9 @@ struct WordView: View, Equatable {
 
         // Measure once at the base size; glyph widths scale linearly with
         // font size. The anchor is measured bold to match its rendering.
-        let beforeWidth = textWidth(parts.before, fontSize: fontSize)
-        let afterWidth = textWidth(parts.after, fontSize: fontSize)
-        let anchorWidth = textWidth(parts.anchor, fontSize: fontSize, bold: !parts.isArabic)
+        let beforeWidth = textWidth(parts.before, font: font, fontSize: fontSize)
+        let afterWidth = textWidth(parts.after, font: font, fontSize: fontSize)
+        let anchorWidth = textWidth(parts.anchor, font: font, fontSize: fontSize, bold: !parts.isArabic)
 
         let neededHalfWidth = max(beforeWidth, afterWidth) + anchorWidth / 2
         let availableHalfWidth = textAreaWidth / 2
@@ -350,12 +357,12 @@ struct WordView: View, Equatable {
         return min(max(idealOffset, -slack), slack)
     }
 
-    /// Measures the rendered width of a text string using the current reader font.
-    private func textWidth(_ text: String, fontSize: CGFloat, bold: Bool = false) -> CGFloat {
+    /// Measures the rendered width of a text string in the reader font.
+    private func textWidth(_ text: String, font: ReaderFont, fontSize: CGFloat, bold: Bool = false) -> CGFloat {
         guard !text.isEmpty else { return 0 }
 
-        let font = readerFont.platformFont(size: fontSize, bold: bold)
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let platformFont = font.platformFont(size: fontSize, bold: bold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: platformFont]
         return ceil((text as NSString).size(withAttributes: attributes).width)
     }
 }
