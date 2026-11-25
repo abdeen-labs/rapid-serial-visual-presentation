@@ -357,6 +357,7 @@ private struct ReaderSwatch: View {
 struct ReadingControlsSection: View {
     @AppStorage(ReaderSettings.Keys.holdToReadEnabled) private var holdToReadEnabled: Bool = ReaderSettings.Defaults.holdToReadEnabled
     @AppStorage(ReaderSettings.Keys.holdSpeedAdjustEnabled) private var holdSpeedAdjustEnabled: Bool = ReaderSettings.Defaults.holdSpeedAdjustEnabled
+    @AppStorage(ReaderSettings.Keys.keepScreenAwakeEnabled) private var keepScreenAwakeEnabled: Bool = ReaderSettings.Defaults.keepScreenAwakeEnabled
 
     var body: some View {
         Section {
@@ -368,6 +369,7 @@ struct ReadingControlsSection: View {
             #else
             Toggle("Drag to Change Speed", isOn: $holdSpeedAdjustEnabled)
             #endif
+            Toggle("Keep Screen Awake", isOn: $keepScreenAwakeEnabled)
         } header: {
             Text("Controls")
         } footer: {

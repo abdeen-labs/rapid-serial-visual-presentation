@@ -50,6 +50,7 @@ struct ReaderView: View {
     @AppStorage(ReaderSettings.Keys.contextWordsOpacity) private var contextWordsOpacity: Double = ReaderSettings.Defaults.contextWordsOpacity
     @AppStorage(ReaderSettings.Keys.enclosingMarksEnabled) private var enclosingMarksEnabled: Bool = ReaderSettings.Defaults.enclosingMarksEnabled
     @AppStorage(ReaderSettings.Keys.wordPopEnabled) private var wordPopEnabled: Bool = ReaderSettings.Defaults.wordPopEnabled
+    @AppStorage(ReaderSettings.Keys.keepScreenAwakeEnabled) private var keepScreenAwakeEnabled: Bool = ReaderSettings.Defaults.keepScreenAwakeEnabled
     @AppStorage(ReaderSettings.Keys.readAloudEnabled) private var readAloudEnabled: Bool = ReaderSettings.Defaults.readAloudEnabled
     @AppStorage(ReaderSettings.Keys.readAloudVoice) private var readAloudVoice: String = ReaderSettings.Defaults.readAloudVoice
     @Bindable var document: Document
@@ -390,6 +391,10 @@ struct ReaderView: View {
         }
         .marksDocumentOpen(document.id)
         .keepsVoiceModelLoaded(holdsVoiceModel)
+        // Only while the words can be seen: a voice reading on in an
+        // inactive scene, as on a Mac behind another app, lets the screen
+        // sleep.
+        .keepsScreenAwake(keepScreenAwakeEnabled && engine.isPlaying && scenePhase == .active)
         // Re-assert keyboard focus whenever any overlay (passage view, chapter
         // picker, settings, save-error or read-aloud alert) closes, so Space/arrow
         // shortcuts keep working on macOS. One derived flag covers all

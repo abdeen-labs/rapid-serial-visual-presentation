@@ -39,6 +39,7 @@ enum ReaderSettings {
         nonisolated static let enclosingMarksSize = "enclosingMarksSize"
         nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
         nonisolated static let wordPopEnabled = "wordPopEnabled"
+        nonisolated static let keepScreenAwakeEnabled = "keepScreenAwakeEnabled"
         nonisolated static let readAloudEnabled = "readAloudEnabled"
         nonisolated static let readAloudVoice = "readAloudVoice"
         nonisolated static let iCloudSyncEnabled = "iCloudSyncEnabled"
@@ -100,6 +101,7 @@ enum ReaderSettings {
         /// `ReaderTextTone.opacity(level:)`.
         nonisolated static let enclosingMarksOpacity = ReaderTextTone.fadedLevel
         nonisolated static let wordPopEnabled = false
+        nonisolated static let keepScreenAwakeEnabled = true
         nonisolated static let readAloudEnabled = false
         /// A Kokoro voice name: ``KokoroVoices/defaultVoice``. A stored
         /// name the catalog doesn't offer, such as a voice identifier from
