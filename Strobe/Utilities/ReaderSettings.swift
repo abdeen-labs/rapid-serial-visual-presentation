@@ -39,6 +39,10 @@ enum ReaderSettings {
         nonisolated static let enclosingMarksSize = "enclosingMarksSize"
         nonisolated static let enclosingMarksOpacity = "enclosingMarksOpacity"
         nonisolated static let wordPopEnabled = "wordPopEnabled"
+        /// The guide line's opacity, from 0 (hidden) to 1; see `GuideLine`.
+        nonisolated static let guideLineOpacity = "guideLineOpacity"
+        /// The guide line's thickness in points.
+        nonisolated static let guideLineWidth = "guideLineWidth"
         nonisolated static let keepScreenAwakeEnabled = "keepScreenAwakeEnabled"
         nonisolated static let speedRampEnabled = "speedRampEnabled"
         /// The share of the speed a reading session starts at; see `SpeedRamp`.
@@ -106,6 +110,8 @@ enum ReaderSettings {
         /// `ReaderTextTone.opacity(level:)`.
         nonisolated static let enclosingMarksOpacity = ReaderTextTone.fadedLevel
         nonisolated static let wordPopEnabled = false
+        nonisolated static let guideLineOpacity = 0.12
+        nonisolated static let guideLineWidth = 1.5
         nonisolated static let keepScreenAwakeEnabled = true
         nonisolated static let speedRampEnabled = false
         nonisolated static let speedRampStart = 0.8

@@ -37,6 +37,9 @@ struct WordView: View, Equatable {
     @AppStorage(ReaderFont.storageKey) private var readerFontSelection = ReaderFont.defaultValue.rawValue
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
     @AppStorage(ReaderHighlightColor.storageKey) private var readerHighlightColorSelection = ReaderHighlightColor.defaultValue.rawValue
+    @AppStorage(GuideLine.Style.storageKey) private var guideLineStyleSelection = GuideLine.Style.defaultValue.rawValue
+    @AppStorage(ReaderSettings.Keys.guideLineOpacity) private var guideLineOpacity: Double = ReaderSettings.Defaults.guideLineOpacity
+    @AppStorage(ReaderSettings.Keys.guideLineWidth) private var guideLineWidth: Double = ReaderSettings.Defaults.guideLineWidth
 
     static func == (lhs: WordView, rhs: WordView) -> Bool {
         lhs.word == rhs.word && lhs.fontSize == rhs.fontSize
@@ -47,6 +50,9 @@ struct WordView: View, Equatable {
             && lhs.readerFontSelection == rhs.readerFontSelection
             && lhs.readerTextToneSelection == rhs.readerTextToneSelection
             && lhs.readerHighlightColorSelection == rhs.readerHighlightColorSelection
+            && lhs.guideLineStyleSelection == rhs.guideLineStyleSelection
+            && lhs.guideLineOpacity == rhs.guideLineOpacity
+            && lhs.guideLineWidth == rhs.guideLineWidth
     }
 
     private var readerFont: ReaderFont {
@@ -210,10 +216,15 @@ struct WordView: View, Equatable {
 
             ZStack {
                 ZStack {
-                    // Subtle vertical guide line at the anchor position
-                    Rectangle()
-                        .fill(anchorColor.opacity(0.12))
-                        .frame(width: 1.5, height: metrics.fontSize * Self.guideLineHeightRatio)
+                    // The guide line at the anchor position, as Settings
+                    // draws it (see `GuideLine`).
+                    GuideLineView(
+                        style: GuideLine.Style.resolve(guideLineStyleSelection),
+                        color: anchorColor,
+                        opacity: guideLineOpacity,
+                        width: CGFloat(guideLineWidth),
+                        fontSize: metrics.fontSize
+                    )
 
                     let gap = metrics.fontSize * Self.contextGapRatio
 

@@ -77,6 +77,61 @@ extension SettingsSliderRow where Title == Text {
     }
 }
 
+/// A settings row: a title, the current value, and − and + buttons that
+/// move it a step at a time (``GuideLine/stepped(_:by:up:in:)``), each
+/// going dim at its end of the range.
+struct SettingsStepperRow: View {
+    let title: String
+    let value: String
+    let accessibilityValue: String
+    @Binding var steppedValue: Double
+    let range: ClosedRange<Double>
+    let step: Double
+
+    init(
+        _ title: String,
+        value: String,
+        accessibilityValue: String? = nil,
+        steppedValue: Binding<Double>,
+        in range: ClosedRange<Double>,
+        step: Double
+    ) {
+        self.title = title
+        self.value = value
+        self.accessibilityValue = accessibilityValue ?? value
+        self._steppedValue = steppedValue
+        self.range = range
+        self.step = step
+    }
+
+    var body: some View {
+        Stepper(
+            label: {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(title)
+                    Spacer(minLength: 12)
+                    Text(value)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            },
+            onIncrement: move(up: true),
+            onDecrement: move(up: false)
+        )
+        .accessibilityLabel(title)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    /// What − or + does, or nil at that end of the range.
+    private func move(up: Bool) -> (() -> Void)? {
+        guard let next = GuideLine.stepped(steppedValue, by: step, up: up, in: range) else { return nil }
+        return {
+            steppedValue = next
+            HapticManager.shared.selectionTick()
+        }
+    }
+}
+
 /// An `Int` setting as the `Double` a `Slider` edits.
 private func sliderBinding(_ value: Binding<Int>) -> Binding<Double> {
     Binding(
@@ -153,6 +208,22 @@ struct ContextWordsPreview: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Preview")
         .accessibilityValue([context.previous, "Strobe", context.next].compactMap(\.self).joined(separator: " "))
+    }
+}
+
+/// The word "Strobe" with the guide line through its anchor letter, so the
+/// guide line's settings show as they're made.
+struct GuideLinePreview: View {
+    @AppStorage(ReaderSettings.Keys.fontSize) private var fontSize: Int = ReaderSettings.Defaults.fontSize
+
+    var body: some View {
+        WordView(word: "Strobe", fontSize: CGFloat(fontSize))
+            .frame(maxWidth: .infinity)
+            .background { ReaderBackdrop() }
+            .clipShape(.rect(cornerRadius: 10, style: .continuous))
+            .padding(.vertical, 4)
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+            .accessibilityHidden(true)
     }
 }
 
@@ -405,6 +476,13 @@ struct WhileReadingSections: View {
     @AppStorage(ReaderSettings.Keys.enclosingMarksSize) private var enclosingMarksSize: Double = ReaderSettings.Defaults.enclosingMarksSize
     @AppStorage(ReaderSettings.Keys.enclosingMarksOpacity) private var enclosingMarksOpacity: Double = ReaderSettings.Defaults.enclosingMarksOpacity
     @AppStorage(ReaderTextTone.storageKey) private var readerTextToneSelection = ReaderTextTone.defaultValue.rawValue
+    @AppStorage(GuideLine.Style.storageKey) private var guideLineStyle = GuideLine.Style.defaultValue.rawValue
+    @AppStorage(ReaderSettings.Keys.guideLineOpacity) private var guideLineOpacity: Double = ReaderSettings.Defaults.guideLineOpacity
+    @AppStorage(ReaderSettings.Keys.guideLineWidth) private var guideLineWidth: Double = ReaderSettings.Defaults.guideLineWidth
+
+    private var guideLineOpacityPercent: Int {
+        Int((guideLineOpacity * 100).rounded())
+    }
 
     private var enclosingMarksSizePercent: Int {
         Int((enclosingMarksSize * 100).rounded())
@@ -437,6 +515,35 @@ struct WhileReadingSections: View {
             }
         } header: {
             Text("Top of the Screen")
+        }
+
+        Section {
+            GuideLinePreview()
+            Picker("Style", selection: $guideLineStyle) {
+                ForEach(GuideLine.Style.allCases) { style in
+                    Text(style.displayName)
+                        .tag(style.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            SettingsStepperRow(
+                "Opacity",
+                value: guideLineOpacityPercent == 0 ? "Off" : "\(guideLineOpacityPercent)%",
+                accessibilityValue: guideLineOpacityPercent == 0 ? "Off" : "\(guideLineOpacityPercent) percent",
+                steppedValue: $guideLineOpacity,
+                in: GuideLine.opacityRange,
+                step: GuideLine.opacityStep
+            )
+            SettingsStepperRow(
+                "Thickness",
+                value: String(format: "%g pt", guideLineWidth),
+                accessibilityValue: String(format: "%g points", guideLineWidth),
+                steppedValue: $guideLineWidth,
+                in: GuideLine.widthRange,
+                step: GuideLine.widthStep
+            )
+        } header: {
+            Text("Guide Line")
         }
 
         Section {
