@@ -13,8 +13,8 @@ import AppKit
 /// that no finger holds goes on afterwards), two fingers to read hands-free
 /// (see ``ReaderTouch``). Paused, a top bar holds
 /// Back, the title, Read Aloud, Look Up, View Text, Settings, and the speed slider, and a
-/// bottom panel holds chapter navigation (when chapters exist) and the
-/// progress bar with the time left; both fade out while reading. With
+/// bottom panel holds chapter navigation (when chapters exist), Reread, and
+/// the progress bar with the time left; both fade out while reading. With
 /// reading aloud on, a voice paces the words (``ReadAloudController``).
 /// Shows a completion card at the end. Persists reading state on disappear
 /// and scene phase changes.
@@ -566,8 +566,13 @@ struct ReaderView: View {
             togglePlayback()
             return .handled
         }
-        .onKeyPress(.leftArrow) {
-            scrubWithFeedback(by: -1)
+        // With Option, back a sentence rather than a word.
+        .onKeyPress(keys: [.leftArrow]) { press in
+            if press.modifiers.contains(.option) {
+                rereadSentence()
+            } else {
+                scrubWithFeedback(by: -1)
+            }
             return .handled
         }
         .onKeyPress(.rightArrow) {
@@ -603,6 +608,20 @@ struct ReaderView: View {
             HapticManager.shared.scrubBoundary()
         } else {
             HapticManager.shared.scrubTick()
+        }
+    }
+
+    /// Goes back to reread the sentence (``RSVPEngine/rereadSentence()``),
+    /// from the Reread button or Option-Left. Reading that was playing goes
+    /// on from there.
+    private func rereadSentence() {
+        if showCompletion {
+            withAnimation { showCompletion = false }
+        }
+        if engine.rereadSentence() {
+            HapticManager.shared.scrubTick()
+        } else {
+            HapticManager.shared.scrubBoundary()
         }
     }
 
@@ -951,11 +970,17 @@ struct ReaderView: View {
                     .padding(.bottom, isCompactHeight ? 0 : 22)
                 }
 
-                ReaderProgressView(
-                    engine: engine,
-                    wordsPerMinute: displayedWPM,
-                    showCompletion: $showCompletion
-                )
+                HStack(spacing: 16) {
+                    RereadButton(engine: engine) {
+                        rereadSentence()
+                    }
+
+                    ReaderProgressView(
+                        engine: engine,
+                        wordsPerMinute: displayedWPM,
+                        showCompletion: $showCompletion
+                    )
+                }
             }
 
             if !isCompactHeight {
@@ -1391,6 +1416,25 @@ private struct CurrentWordView: View {
             }
             .animation(reduceMotion ? nil : .easeOut(duration: RSVPEngine.chapterFadeDuration),
                        value: engine.isChapterTitleVisible)
+    }
+}
+
+/// The reader's Reread button, beside the progress bar: back to the start
+/// of the sentence, and from there a sentence at a time. Dimmed at the
+/// document's first word. Isolates the position read, and makes it only
+/// while paused: the button is hidden with its bar while words play.
+private struct RereadButton: View {
+    let engine: RSVPEngine
+    let action: () -> Void
+
+    var body: some View {
+        let canGoBack = !engine.isPlaying && engine.currentIndex > 0
+        ReaderGlassButton(
+            systemImage: "arrow.uturn.backward",
+            accessibilityLabel: "Reread Sentence",
+            action: action
+        )
+        .disabled(!canGoBack)
     }
 }
 

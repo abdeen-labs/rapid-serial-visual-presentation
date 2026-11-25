@@ -439,6 +439,25 @@ final class RSVPEngine {
         seek(to: 0)
     }
 
+    /// Goes back to the first word of the sentence at the position, or of
+    /// the sentence before from within its first words
+    /// (``SentenceBreak/rereadStart(from:in:blockEnds:startsChapter:)``).
+    /// Reading that was playing goes on from there. Returns `false` at the
+    /// document's first word, with nowhere to go back to.
+    @discardableResult
+    func rereadSentence() -> Bool {
+        guard let start = SentenceBreak.rereadStart(
+            from: currentIndex,
+            in: words,
+            blockEnds: blockEnds,
+            startsChapter: { chaptersByIndex[$0] != nil }
+        ) else { return false }
+        let wasPlaying = isPlaying
+        seek(to: start)
+        if wasPlaying { play() }
+        return true
+    }
+
     /// Returns the words played since the last call, and starts the count
     /// over.
     func takePlayedWordCount() -> Int {

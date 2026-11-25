@@ -282,4 +282,57 @@ nonisolated enum SentenceBreak {
             return scalar.properties.isAlphabetic || scalar.properties.numericType != nil
         }
     }
+
+    // MARK: - Rereading
+
+    /// The furthest back a sentence's start is looked for. Text with no
+    /// sentence ends in it, such as verse or a list imported without its
+    /// blocks, goes back this many words instead.
+    static let longestSentence = 200
+
+    /// How far into a sentence going back still means the sentence before:
+    /// by the time a reader lets go to reread one, the next has begun.
+    static let nearStart = 2
+
+    /// The index of the first word of the sentence the word at `index` is
+    /// in: a chapter's first word, or the word after the nearest sentence
+    /// end (``endsSentence(at:in:)``) or pausing block end before it, or
+    /// else the document's first. Looks back ``longestSentence`` words at
+    /// most.
+    static func sentenceStart(
+        at index: Int,
+        in words: [String],
+        blockEnds: BlockEnds = .none,
+        startsChapter: (Int) -> Bool = { _ in false }
+    ) -> Int {
+        guard !words.isEmpty else { return 0 }
+        var start = max(0, min(index, words.count - 1))
+        let earliest = max(0, start - longestSentence)
+        while start > earliest {
+            if startsChapter(start)
+                || endsSentence(at: start - 1, in: words)
+                || blockEnds.pause(after: start - 1, in: words) == .block {
+                break
+            }
+            start -= 1
+        }
+        return start
+    }
+
+    /// Where rereading from the word at `index` goes back to: the first
+    /// word of its sentence, or, within ``nearStart`` words of that, the
+    /// first word of the sentence before, so going back again steps back a
+    /// sentence at a time. Nil at the document's first word, with nowhere
+    /// to go back to.
+    static func rereadStart(
+        from index: Int,
+        in words: [String],
+        blockEnds: BlockEnds = .none,
+        startsChapter: (Int) -> Bool = { _ in false }
+    ) -> Int? {
+        guard index > 0, index < words.count else { return nil }
+        let start = sentenceStart(at: index, in: words, blockEnds: blockEnds, startsChapter: startsChapter)
+        guard start > 0, index - start <= nearStart else { return start }
+        return sentenceStart(at: start - 1, in: words, blockEnds: blockEnds, startsChapter: startsChapter)
+    }
 }
