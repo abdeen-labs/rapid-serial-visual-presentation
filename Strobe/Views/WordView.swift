@@ -211,6 +211,12 @@ struct WordView: View, Equatable {
     var body: some View {
         let parts = makeParts()
         let anchorColor = textTone.anchorColor(for: highlightColor)
+        // Read here, not in the geometry reader's closure: a setting only
+        // read in there doesn't redraw the word when it changes, and a
+        // paused reader kept the old guide line until the next word.
+        let guideLineStyle = GuideLine.Style.resolve(guideLineStyleSelection)
+        let guideLineOpacity = self.guideLineOpacity
+        let guideLineWidth = CGFloat(self.guideLineWidth)
         GeometryReader { geo in
             let metrics = layoutMetrics(for: geo.size.width, parts: parts)
 
@@ -219,10 +225,10 @@ struct WordView: View, Equatable {
                     // The guide line at the anchor position, as Settings
                     // draws it (see `GuideLine`).
                     GuideLineView(
-                        style: GuideLine.Style.resolve(guideLineStyleSelection),
+                        style: guideLineStyle,
                         color: anchorColor,
                         opacity: guideLineOpacity,
-                        width: CGFloat(guideLineWidth),
+                        width: guideLineWidth,
                         fontSize: metrics.fontSize
                     )
 
