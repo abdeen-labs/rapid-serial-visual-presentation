@@ -59,7 +59,7 @@ nonisolated enum WhatsNew {
             Item(
                 symbol: "character.book.closed",
                 title: "Look Up a Word",
-                detail: "Pause on a word and use Look Up, at the top of the reader, to see it in the dictionary."
+                detail: "Pause on a word and use Look Up, beside the progress bar, to see it in the dictionary."
             ),
             Item(
                 symbol: "sun.max",

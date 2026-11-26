@@ -12,9 +12,10 @@ import AppKit
 /// is off or a voice reads aloud), release to pause, swipe to scrub (reading
 /// that no finger holds goes on afterwards), two fingers to read hands-free
 /// (see ``ReaderTouch``). Paused, a top bar holds
-/// Back, the title, Read Aloud, Look Up, View Text, Settings, and the speed slider, and a
-/// bottom panel holds chapter navigation (when chapters exist), Reread, and
-/// the progress bar with the time left; both fade out while reading. With
+/// Back, the title, Read Aloud, View Text, Settings, and the speed slider, and a
+/// bottom panel holds chapter navigation (when chapters exist) and the
+/// progress bar with the time left, between Reread and Look Up; both fade
+/// out while reading. With
 /// reading aloud on, a voice paces the words (``ReadAloudController``).
 /// Shows a completion card at the end. Persists reading state on disappear
 /// and scene phase changes.
@@ -871,8 +872,8 @@ struct ReaderView: View {
 
     // MARK: - Top bar
 
-    /// Back, the title, Read Aloud, Look Up, View Text, and Settings, laid
-    /// out like a navigation bar, over the speed. Speed sits up here rather than in
+    /// Back, the title, Read Aloud, View Text, and Settings, laid out like a
+    /// navigation bar, over the speed. Speed sits up here rather than in
     /// the bottom panel so the two bars stay about the same height: the
     /// word's line has to clear both on the smallest screens, and the marks
     /// above the word get the room to the nearer bar.
@@ -913,16 +914,6 @@ struct ReaderView: View {
                 ReadAloudButton(controller: readAloud, isEnabled: readAloudEnabled) { tap in
                     readAloudButtonTapped(tap)
                 }
-            }
-
-            // The word showing, in the system dictionary: a sheet on iOS,
-            // the Dictionary app on macOS.
-            LookUpButton(engine: engine, showsWord: !showCompletion) { term in
-                #if os(iOS)
-                lookUpTerm = DictionaryLookup.Term(text: term)
-                #elseif os(macOS)
-                DictionaryLookup.open(term)
-                #endif
             }
 
             ReaderGlassButton(systemImage: "text.alignleft", accessibilityLabel: "View Text") {
@@ -980,6 +971,18 @@ struct ReaderView: View {
                         wordsPerMinute: displayedWPM,
                         showCompletion: $showCompletion
                     )
+
+                    // The word showing, in the system dictionary: a sheet
+                    // on iOS, the Dictionary app on macOS. Down here with
+                    // Reread, not in the top bar, where a fifth button left
+                    // the title little room on an iPhone.
+                    LookUpButton(engine: engine, showsWord: !showCompletion) { term in
+                        #if os(iOS)
+                        lookUpTerm = DictionaryLookup.Term(text: term)
+                        #elseif os(macOS)
+                        DictionaryLookup.open(term)
+                        #endif
+                    }
                 }
             }
 
