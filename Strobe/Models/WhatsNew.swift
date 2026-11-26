@@ -50,6 +50,13 @@ nonisolated enum WhatsNew {
 
     /// Every release, newest first.
     static let releases: [Release] = [
+        Release(version: "3.7.1", items: [
+            Item(
+                symbol: "character.book.closed",
+                title: "Look Up Has Moved",
+                detail: "Look Up is now beside the progress bar, across from Reread, so the title at the top has its room back."
+            ),
+        ]),
         Release(version: "3.7", items: [
             Item(
                 symbol: "arrow.uturn.backward",
