@@ -22,7 +22,9 @@ import AppKit
 /// `ModelContext.didSave` observers see them too.
 ///
 /// Each document syncs as a book record (title, file name, date added,
-/// chapters, words, complexity scores) and a reading state record. The
+/// chapters, words, complexity scores, block ends, cover) and a reading
+/// state record. Only the title and the cover change once the book is in
+/// iCloud. The
 /// security-scoped bookmark stays on the device that made it, which is the
 /// only place it resolves.
 ///
@@ -95,6 +97,9 @@ final class LibrarySync: CKSyncEngineDelegate {
     /// Whether the session records an earlier build passed over are being
     /// fetched (`catchUpOnSessions`).
     @ObservationIgnored private var isCatchingUpOnSessions = false
+    /// Whether the covers an earlier build passed over are being fetched
+    /// (`catchUpOnCovers`).
+    @ObservationIgnored private var isCatchingUpOnCovers = false
     /// Books whose refetched records `applyRefetchedBooks` is taking in.
     @ObservationIgnored private var refetchingBooks: Set<UUID> = []
     @ObservationIgnored private var lastFetchRequest = Date.distantPast
@@ -291,8 +296,10 @@ final class LibrarySync: CKSyncEngineDelegate {
         let engine = CKSyncEngine(configuration)
         if ledger.engineState == nil {
             engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudSyncSchema.zoneID))])
-            // Fetching from the start, this build takes in every session.
+            // Fetching from the start, this build takes in every session
+            // and every cover, with the whole records.
             ledger.hasFetchedSessions = true
+            ledger.hasFetchedCovers = true
         }
         self.cloudContainer = cloudContainer
         self.engine = engine
@@ -350,6 +357,7 @@ final class LibrarySync: CKSyncEngineDelegate {
             finishFirstFetchIfNeeded()
             refetchSkippedBooks(on: engine)
             catchUpOnSessions(on: engine)
+            catchUpOnCovers(on: engine)
         }
     }
 
@@ -498,6 +506,12 @@ final class LibrarySync: CKSyncEngineDelegate {
             for (id, position) in plan.positionUpdates {
                 byID[id]?.applyReadingPosition(position)
             }
+            // Before the copies leave. The next reconcile sends the cover.
+            for (keeperID, copyID) in plan.coverHandoffs {
+                guard let keeper = byID[keeperID], keeper.coverFingerprint == nil,
+                      let cover = byID[copyID]?.coverImageData, !cover.isEmpty else { continue }
+                keeper.setCover(cover)
+            }
             for id in plan.removals {
                 if let document = byID[id] { context.delete(document) }
             }
@@ -549,7 +563,8 @@ final class LibrarySync: CKSyncEngineDelegate {
             title: document.title,
             position: document.readingPosition,
             dateAdded: document.dateAdded,
-            isOpen: isOpen(document.id, now: now)
+            isOpen: isOpen(document.id, now: now),
+            coverFingerprint: document.coverFingerprint
         )
     }
 
@@ -905,8 +920,11 @@ final class LibrarySync: CKSyncEngineDelegate {
             let record = entry.bookSystemFields.flatMap(CloudRecordArchive.record(fromSystemFields:))
                 ?? CKRecord(recordType: key.recordType, recordID: recordID)
             record.encryptedValues[CloudSyncSchema.BookField.title] = document.title
-            // Already in iCloud: the title is the only part that changes.
-            guard entry.bookSystemFields == nil else { return (record, 0) }
+            // Already in iCloud: the title and the cover are the parts that
+            // change. Only the keys set here are sent.
+            guard entry.bookSystemFields == nil else {
+                return await withChangedCover(record, of: document, key: key)
+            }
 
             // First upload: the whole book. Read everything before the
             // await; the document may not outlive it.
@@ -914,7 +932,9 @@ final class LibrarySync: CKSyncEngineDelegate {
             let words = document.wordsBlob.flatMap { $0.isEmpty ? nil : $0 } ?? WordStorage.encode(document.words)
             let complexity = document.complexityBlob
             let blockEnds = document.blockEndsBlob
-            let coverImage = document.coverImageData
+            // The asset goes with its fingerprint, so the record never
+            // carries a cover it says it doesn't have.
+            let coverImage = document.coverFingerprint == nil ? nil : document.coverImageData
             let chapters = document.chapters
             var fields = BookRecordFields(
                 title: document.title,
@@ -922,7 +942,8 @@ final class LibrarySync: CKSyncEngineDelegate {
                 dateAdded: document.dateAdded,
                 wordCount: document.wordCount,
                 chapters: chapters,
-                contentHash: ""
+                contentHash: "",
+                coverFingerprint: SyncedCover.of(document.coverFingerprint)
             )
             let upload: BookUpload
             do {
@@ -957,6 +978,43 @@ final class LibrarySync: CKSyncEngineDelegate {
             ledger.setContentHash(upload.contentHash, for: documentID)
             return (record, upload.byteCount)
         }
+    }
+
+    /// An update to a book already in iCloud, with its cover added when it
+    /// differs from iCloud's: the new cover's asset and fingerprint, or a
+    /// removal. A rename alone sends no cover. The cover's bytes count
+    /// toward the batch like a new book's.
+    private func withChangedCover(
+        _ record: CKRecord,
+        of document: Document,
+        key: CloudRecordKey
+    ) async -> (record: CKRecord, assetBytes: Int)? {
+        guard ledger.coverChanged(key.documentID, coverFingerprint: document.coverFingerprint) else {
+            return (record, 0)
+        }
+        guard let fingerprint = document.coverFingerprint else {
+            BookRecordFields.writeCover(nil, asset: nil, to: record)
+            return (record, 0)
+        }
+        guard let cover = document.coverImageData, !cover.isEmpty else {
+            // `setCover` keeps the two in step, so this shouldn't happen;
+            // the title goes on its own.
+            logger.error("A changed cover has no image to upload")
+            return (record, 0)
+        }
+        let documentID = document.id
+        let url: URL
+        do {
+            url = try await Task.detached(priority: .utility) {
+                try BookUpload.prepareCover(documentID: documentID, cover: cover)
+            }.value
+        } catch {
+            logger.error("Couldn't prepare a cover for upload: \(error.localizedDescription, privacy: .public)")
+            hold(key, until: .now.addingTimeInterval(600))
+            return nil
+        }
+        BookRecordFields.writeCover(fingerprint, asset: CKAsset(fileURL: url), to: record)
+        return (record, cover.count)
     }
 
     // MARK: - Account and zone
@@ -1173,7 +1231,8 @@ final class LibrarySync: CKSyncEngineDelegate {
                 key,
                 systemFields: CloudRecordArchive.systemFields(of: record),
                 title: key.kind == .book ? BookRecordFields.title(in: record) : nil,
-                state: key.kind == .state ? StampedReadingPosition(record: record) : nil
+                state: key.kind == .state ? StampedReadingPosition(record: record) : nil,
+                cover: key.kind == .book ? BookRecordFields.coverFingerprint(in: record) : nil
             )
             heldRecords[key.recordName] = nil
             touched.append(key)
@@ -1305,6 +1364,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         switch key.kind {
         case .book:
             return entry.bookSystemFields == nil || entry.syncedTitle != document.title
+                || CloudSyncLedger.coverChanged(entry, coverFingerprint: document.coverFingerprint)
         case .state:
             return entry.stateSystemFields == nil || entry.syncedState?.position != document.readingPosition
         }
@@ -1481,17 +1541,128 @@ final class LibrarySync: CKSyncEngineDelegate {
         saveLedger()
     }
 
+    /// Fetches every book's cover once, for a ledger whose engine fetched
+    /// under a build that didn't read covers: its change token has moved
+    /// past them, so books from other devices, and covers changed elsewhere
+    /// meanwhile, would show the generated cover for good. Asks for the
+    /// cover fields alone, a page at a time, and takes each cover in as a
+    /// fetched change would (`receiveCover`, `takeCover`). It never adds,
+    /// removes, or uploads a book. Marked done only once every page went
+    /// through; one that stops partway starts over after a later fetch, and
+    /// the covers it took are then the same here and pass by.
+    private func catchUpOnCovers(on engine: CKSyncEngine) {
+        guard !isCatchingUpOnCovers, ledger.needsCoverCatchUp, accountConfirmedEngine === engine else { return }
+        isCatchingUpOnCovers = true
+        let database = engine.database
+        Task.detached { [weak self] in
+            var token: CKServerChangeToken?
+            var succeeded = true
+            do {
+                while true {
+                    let changes = try await database.recordZoneChanges(
+                        inZoneWith: CloudSyncSchema.zoneID,
+                        since: token,
+                        desiredKeys: [CloudSyncSchema.BookField.coverImage, CloudSyncSchema.BookField.coverFingerprint]
+                    )
+                    var covers: [FetchedCover] = []
+                    for result in changes.modificationResultsByID.values {
+                        if case .success(let modification) = result,
+                           let cover = FetchedCover(record: modification.record) {
+                            covers.append(cover)
+                        }
+                    }
+                    // Taken in before the next page, while the downloaded
+                    // files are there, a few covers per save.
+                    guard await self?.applyCaughtUpCovers(covers, engine: engine) == true else {
+                        succeeded = false
+                        break
+                    }
+                    token = changes.changeToken
+                    guard changes.moreComing else { break }
+                }
+            } catch {
+                await self?.log("Fetching covers failed", error)
+                succeeded = false
+            }
+            await self?.finishCatchingUpOnCovers(succeeded: succeeded, engine: engine)
+        }
+    }
+
+    /// Takes in a page of covers from `catchUpOnCovers`, saving them in
+    /// runs of at most `maxBookBytesPerSave`. Returns false when the rest
+    /// mustn't be taken in: sync stopped or started over meanwhile, or the
+    /// library couldn't be read or saved.
+    private func applyCaughtUpCovers(_ covers: [FetchedCover], engine: CKSyncEngine) async -> Bool {
+        guard engine === self.engine, let context = container?.mainContext else { return false }
+        let ids = covers.map(\.documentID)
+        guard !ids.isEmpty else { return true }
+        let documents: [Document]
+        do {
+            documents = try context.fetch(FetchDescriptor<Document>(predicate: #Predicate { ids.contains($0.id) }))
+        } catch {
+            logger.error("Couldn't read the library to take in covers: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        let localCovers = Dictionary(
+            documents.map { ($0.id, SyncedCover.of($0.coverFingerprint)) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let toTake = ledger.receiveCaughtUpCovers(covers, localCovers: localCovers)
+        saveLedger()
+        for range in BookContent.saveRanges(sizes: toTake.map(\.byteCount), limit: Self.maxBookBytesPerSave) {
+            let chunk = Array(toTake[range])
+            let images = await Task.detached(priority: .utility) {
+                var images: [UUID: Data] = [:]
+                for cover in chunk {
+                    images[cover.documentID] = BookContent.loadCover(at: cover.fileURL, recordedAs: cover.fingerprint)
+                }
+                return images
+            }.value
+            guard engine === self.engine else { return false }
+            let ledgerBefore = ledger
+            for cover in chunk {
+                let id = cover.documentID
+                // Checked again: the library may have changed meanwhile.
+                guard let document = localDocument(id),
+                      ledger.entry(for: id)?.removal == nil, !ledger.isPendingDelete(id),
+                      ledger.takesCover(cover.fingerprint, for: id, localCover: document.coverFingerprint) else { continue }
+                takeCover(cover.fingerprint, data: images[id], for: document)
+            }
+            guard saveContext(context) else {
+                ledger = ledgerBefore
+                return false
+            }
+            saveLedger()
+        }
+        return true
+    }
+
+    private func finishCatchingUpOnCovers(succeeded: Bool, engine: CKSyncEngine) {
+        isCatchingUpOnCovers = false
+        guard succeeded, engine === self.engine else { return }
+        ledger.hasFetchedCovers = true
+        saveLedger()
+    }
+
     /// The bytes of words, scores, chapters, and cover a book record
-    /// brings, when it's new to this device; 0 for a book already here,
-    /// whose record only updates its title.
+    /// brings, when it's new to this device. For a book already here, the
+    /// bytes of a cover that changed in iCloud, or 0 when the record only
+    /// updates its title.
     private func newBookBytes(of record: CKRecord) -> Int {
-        guard let key = CloudRecordKey(recordID: record.recordID),
-              ledger.entry(for: key.documentID)?.hasLocalDocument != true else { return 0 }
-        return [
-            CloudSyncSchema.BookField.words, CloudSyncSchema.BookField.complexity,
-            CloudSyncSchema.BookField.blockEnds, CloudSyncSchema.BookField.chaptersAsset,
-            CloudSyncSchema.BookField.coverImage,
-        ]
+        guard let key = CloudRecordKey(recordID: record.recordID) else { return 0 }
+        let assets: [String]
+        if let entry = ledger.entry(for: key.documentID), entry.hasLocalDocument {
+            guard let cover = BookRecordFields.coverFingerprint(in: record),
+                  cover != SyncedCover.noCover, cover != entry.syncedCover else { return 0 }
+            assets = [CloudSyncSchema.BookField.coverImage]
+        } else {
+            assets = [
+                CloudSyncSchema.BookField.words, CloudSyncSchema.BookField.complexity,
+                CloudSyncSchema.BookField.blockEnds, CloudSyncSchema.BookField.chaptersAsset,
+                CloudSyncSchema.BookField.coverImage,
+            ]
+        }
+        return assets
             .compactMap { (record[$0] as? CKAsset)?.fileURL }
             .compactMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
             .reduce(0, +)
@@ -1509,13 +1680,27 @@ final class LibrarySync: CKSyncEngineDelegate {
         engine: CKSyncEngine,
         context: ModelContext
     ) async -> Bool {
-        // Words of books new to this device, read off the main actor while
-        // CloudKit's downloaded files still exist.
+        // Words of books new to this device, and changed covers of books
+        // already here, read off the main actor while CloudKit's downloaded
+        // files still exist.
         var contents: [UUID: BookContent] = [:]
+        var covers: [UUID: Data] = [:]
         for record in books {
             guard let key = CloudRecordKey(recordID: record.recordID),
-                  ledger.entry(for: key.documentID)?.hasLocalDocument != true,
                   let fields = BookRecordFields(record: record) else { continue }
+            guard ledger.entry(for: key.documentID)?.hasLocalDocument != true else {
+                // Only a cover this device would take is read.
+                guard let remote = fields.coverFingerprint, remote != SyncedCover.noCover,
+                      remote != ledger.entry(for: key.documentID)?.syncedCover,
+                      let coverURL = (record[CloudSyncSchema.BookField.coverImage] as? CKAsset)?.fileURL,
+                      let local = localDocument(key.documentID),
+                      ledger.takesCover(remote, for: key.documentID, localCover: local.coverFingerprint) else { continue }
+                covers[key.documentID] = await Task.detached(priority: .utility) {
+                    BookContent.loadCover(at: coverURL, recordedAs: remote)
+                }.value
+                guard engine === self.engine else { return false }
+                continue
+            }
             let wordsURL = (record[CloudSyncSchema.BookField.words] as? CKAsset)?.fileURL
             let complexityURL = (record[CloudSyncSchema.BookField.complexity] as? CKAsset)?.fileURL
             let chaptersURL = (record[CloudSyncSchema.BookField.chaptersAsset] as? CKAsset)?.fileURL
@@ -1546,7 +1731,7 @@ final class LibrarySync: CKSyncEngineDelegate {
         let now = Date.now
 
         for record in books {
-            applyBook(record, contents: contents, documents: &byID, inserted: &inserted, context: context)
+            applyBook(record, contents: contents, covers: covers, documents: &byID, inserted: &inserted, context: context)
         }
         for record in states {
             applyState(record, documents: byID, now: now)
@@ -1579,6 +1764,7 @@ final class LibrarySync: CKSyncEngineDelegate {
     private func applyBook(
         _ record: CKRecord,
         contents: [UUID: BookContent],
+        covers: [UUID: Data],
         documents: inout [UUID: Document],
         inserted: inout [UUID],
         context: ModelContext
@@ -1596,6 +1782,10 @@ final class LibrarySync: CKSyncEngineDelegate {
         if let document = documents[id] {
             if let title = ledger.receiveBook(fields, systemFields: systemFields, for: id, localTitle: document.title) {
                 document.title = title
+            }
+            if ledger.receiveCover(fields.coverFingerprint, for: id, localCover: document.coverFingerprint),
+               let remote = fields.coverFingerprint {
+                takeCover(remote, data: covers[id] ?? contents[id]?.coverImage, for: document)
             }
             return
         }
@@ -1628,6 +1818,16 @@ final class LibrarySync: CKSyncEngineDelegate {
         document.blockEndsBlob = content.blockEnds
         document.setCover(content.coverImage)
         _ = ledger.receiveBook(fields, systemFields: systemFields, for: id, localTitle: nil)
+        // Records iCloud's cover when the book took it. One it couldn't
+        // read isn't recorded, and the next reconcile counts iCloud's as no
+        // cover, the same as the generated one here, so nothing is sent
+        // over it. A record without a fingerprint whose asset was taken has
+        // that cover in iCloud, so it isn't sent back.
+        if fields.coverFingerprint == nil, let taken = document.coverFingerprint {
+            ledger.coverTaken(taken, for: id)
+        } else {
+            _ = ledger.receiveCover(fields.coverFingerprint, for: id, localCover: document.coverFingerprint)
+        }
         // Its reading state may have arrived first.
         if let waiting = ledger.entry(for: id)?.syncedState {
             document.applyReadingPosition(waiting.position)
@@ -1658,6 +1858,22 @@ final class LibrarySync: CKSyncEngineDelegate {
             logger.info("Merging a local copy into the same book from iCloud")
             ledger.markMerged(copy.id, into: id)
         }
+    }
+
+    /// Shows a cover changed in iCloud, `remote`, on a book already here:
+    /// removes the cover, or sets the one downloaded, `data`, if it's an
+    /// image with that fingerprint. One that isn't leaves the cover here and
+    /// the ledger as they were.
+    private func takeCover(_ remote: String, data: Data?, for document: Document) {
+        if remote == SyncedCover.noCover {
+            document.setCover(nil)
+        } else if let data, ContentFingerprint.of(data) == remote, CoverImage.isStorable(data) {
+            document.setCover(data)
+        } else {
+            logger.notice("A changed cover from iCloud couldn't be read; keeping the one here")
+            return
+        }
+        ledger.coverTaken(remote, for: document.id)
     }
 
     private func applyState(_ record: CKRecord, documents: [UUID: Document], now: Date) {

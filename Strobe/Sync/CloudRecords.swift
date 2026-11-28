@@ -57,12 +57,20 @@ nonisolated enum CloudSyncSchema {
         /// books without one and books imported before covers were kept.
         /// Older builds don't read it, so it needs no new `bookFormat`.
         static let coverImage = "coverImage"
+        /// The cover's fingerprint (`Document.coverFingerprint`), or
+        /// ``SyncedCover/noCover`` for a book without one, so devices can
+        /// tell a changed cover without downloading it. Absent from records
+        /// written before covers could change; a book already here then
+        /// takes nothing from the record, and counts iCloud's cover as none.
+        /// Older builds don't read it, and only send the keys they set, so
+        /// they leave it as it is.
+        static let coverFingerprint = "coverFingerprint"
 
         /// Every field. `CloudSchemaSeed` sets them all; a new field goes
         /// here too.
         static let all = [
             format, title, fileName, dateAdded, wordCount, chapters, chaptersAsset,
-            contentHash, words, complexity, blockEnds, coverImage,
+            contentHash, words, complexity, blockEnds, coverImage, coverFingerprint,
         ]
     }
 
@@ -125,6 +133,7 @@ nonisolated enum CloudSchemaSeed {
 
         let words = WordStorage.encode(["Strobe"])
         let chapters = [Chapter(title: "Strobe", wordIndex: 0)]
+        let cover = Data([0xFF, 0xD8, 0xFF, 0xD9])
         let book = CKRecord(
             recordType: CloudSyncSchema.RecordType.book,
             recordID: CKRecord.ID(recordName: "seed-book", zoneID: zoneID)
@@ -135,7 +144,8 @@ nonisolated enum CloudSchemaSeed {
             dateAdded: .now,
             wordCount: 1,
             chapters: chapters,
-            contentHash: ContentFingerprint.of(words)
+            contentHash: ContentFingerprint.of(words),
+            coverFingerprint: ContentFingerprint.of(cover)
         ).write(to: book)
         book[CloudSyncSchema.BookField.words] = try asset(words, named: "words")
         book[CloudSyncSchema.BookField.complexity] = try asset(ComplexityStorage.encode([0.5]), named: "complexity")
@@ -143,7 +153,7 @@ nonisolated enum CloudSchemaSeed {
             BlockEndStorage.encode(BlockEnds([0: .block])) ?? Data(), named: "blockEnds"
         )
         book[CloudSyncSchema.BookField.chaptersAsset] = try asset(JSONEncoder().encode(chapters), named: "chapters")
-        book[CloudSyncSchema.BookField.coverImage] = try asset(Data([0xFF, 0xD8, 0xFF, 0xD9]), named: "coverImage")
+        book[CloudSyncSchema.BookField.coverImage] = try asset(cover, named: "coverImage")
 
         let state = CKRecord(
             recordType: CloudSyncSchema.RecordType.readingState,
@@ -296,6 +306,10 @@ nonisolated struct BookRecordFields: Equatable {
     /// two devices before they synced.
     var contentHash: String
     var format: Int64 = CloudSyncSchema.bookFormat
+    /// The cover's fingerprint, ``SyncedCover/noCover`` for a book without
+    /// one, or nil when the record doesn't say (written before covers could
+    /// change).
+    var coverFingerprint: String? = nil
 
     /// Writes every field. Encrypted, so with Advanced Data Protection only
     /// the user's devices can read them. (Assets are always encrypted.)
@@ -307,6 +321,9 @@ nonisolated struct BookRecordFields: Equatable {
         record.encryptedValues[Field.dateAdded] = dateAdded
         record.encryptedValues[Field.wordCount] = Int64(wordCount)
         record.encryptedValues[Field.contentHash] = contentHash
+        if let coverFingerprint {
+            record.encryptedValues[Field.coverFingerprint] = coverFingerprint
+        }
         // Longer lists go in `chaptersAsset`; see `BookUpload`.
         if let chapterData = try? JSONEncoder().encode(chapters),
            chapterData.count <= CloudSyncSchema.maxInlineChapterBytes {
@@ -321,7 +338,8 @@ nonisolated struct BookRecordFields: Equatable {
         wordCount: Int,
         chapters: [Chapter],
         contentHash: String,
-        format: Int64 = CloudSyncSchema.bookFormat
+        format: Int64 = CloudSyncSchema.bookFormat,
+        coverFingerprint: String? = nil
     ) {
         self.title = title
         self.fileName = fileName
@@ -330,6 +348,7 @@ nonisolated struct BookRecordFields: Equatable {
         self.chapters = chapters
         self.contentHash = contentHash
         self.format = format
+        self.coverFingerprint = coverFingerprint
     }
 
     init?(record: CKRecord) {
@@ -349,13 +368,80 @@ nonisolated struct BookRecordFields: Equatable {
             wordCount: Int(wordCount),
             chapters: chapters,
             contentHash: contentHash,
-            format: record.encryptedValues[Field.format] as? Int64 ?? CloudSyncSchema.bookFormat
+            format: record.encryptedValues[Field.format] as? Int64 ?? CloudSyncSchema.bookFormat,
+            coverFingerprint: Self.coverFingerprint(in: record)
         )
     }
 
     /// The title alone, from a record that may carry only changed fields.
     static func title(in record: CKRecord) -> String? {
         record.encryptedValues[CloudSyncSchema.BookField.title] as? String
+    }
+
+    /// The cover's fingerprint alone, from a record that may carry only
+    /// changed fields. Nil when the record doesn't say.
+    static func coverFingerprint(in record: CKRecord) -> String? {
+        record.encryptedValues[CloudSyncSchema.BookField.coverFingerprint] as? String
+    }
+
+    /// Writes a cover changed on a book already in iCloud: its asset and
+    /// fingerprint, or, for a removed cover (`coverFingerprint` nil), no
+    /// asset and ``SyncedCover/noCover``. Only these two keys change, so
+    /// the rest of the record stays as it is.
+    static func writeCover(_ coverFingerprint: String?, asset: CKAsset?, to record: CKRecord) {
+        typealias Field = CloudSyncSchema.BookField
+        if let coverFingerprint, let asset {
+            record[Field.coverImage] = asset
+            record.encryptedValues[Field.coverFingerprint] = coverFingerprint
+        } else {
+            record.setObject(nil, forKey: Field.coverImage)
+            record.encryptedValues[Field.coverFingerprint] = SyncedCover.noCover
+        }
+    }
+}
+
+/// A document's cover as sync compares it: its fingerprint, or ``noCover``.
+/// Covers are compared by fingerprint alone, so a reconcile never reads an
+/// image.
+nonisolated enum SyncedCover {
+    /// A book without a cover, in records and the ledger. A record with no
+    /// fingerprint at all says nothing about the cover; a ledger entry with
+    /// none counts as this once its book is in iCloud.
+    static let noCover = ""
+
+    /// The cover of a document whose `coverFingerprint` is `fingerprint`.
+    static func of(_ fingerprint: String?) -> String {
+        fingerprint ?? noCover
+    }
+}
+
+/// A book's cover as the cover catch-up fetches it
+/// (`LibrarySync.catchUpOnCovers`): the record's cover fields alone.
+nonisolated struct FetchedCover: Equatable, Sendable {
+    var documentID: UUID
+    /// A ``SyncedCover`` fingerprint.
+    var fingerprint: String
+    /// The downloaded asset, if the record has one.
+    var fileURL: URL?
+    /// The asset's size, which batches the covers saved together.
+    var byteCount: Int
+}
+
+nonisolated extension FetchedCover {
+    /// Nil for a record that isn't a book's, or one that doesn't say what
+    /// its cover is.
+    init?(record: CKRecord) {
+        guard record.recordType == CloudSyncSchema.RecordType.book,
+              let key = CloudRecordKey(recordID: record.recordID), key.kind == .book,
+              let fingerprint = BookRecordFields.coverFingerprint(in: record) else { return nil }
+        let url = (record[CloudSyncSchema.BookField.coverImage] as? CKAsset)?.fileURL
+        let size = url.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize } ?? 0
+        self.init(
+            documentID: key.documentID,
+            fingerprint: fingerprint,
+            fileURL: url,
+            byteCount: fingerprint == SyncedCover.noCover ? 0 : size
+        )
     }
 }
 
@@ -495,6 +581,14 @@ nonisolated struct BookUpload {
     let contentHash: String
     let byteCount: Int
 
+    /// Writes a changed cover out for upload, for a book already in iCloud.
+    static func prepareCover(documentID: UUID, cover: Data) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "\(documentID.uuidString).coverImage")
+        try cover.write(to: url, options: .atomic)
+        return url
+    }
+
     /// Where upload files wait until their send finishes. CloudKit reads
     /// them during the send, so they're only cleared between sends.
     static var directory: URL {
@@ -591,12 +685,21 @@ nonisolated struct BookContent {
                 return data
             }
         // A cover that isn't an image leaves the generated one.
-        let coverImage = coverImageURL
-            .flatMap { try? Data(contentsOf: $0) }
-            .flatMap { CoverImage.isStorable($0) ? $0 : nil }
+        let coverImage = loadCover(at: coverImageURL, recordedAs: fields.coverFingerprint)
         return BookContent(
             words: words, complexity: complexity, chapters: chapters, blockEnds: blockEnds, coverImage: coverImage
         )
+    }
+
+    /// A downloaded cover that can be kept: an image (`CoverImage.isStorable`)
+    /// matching the fingerprint its record gives, if it gives one. Nil for
+    /// a record that says the book has no cover, whatever asset it still
+    /// carries.
+    static func loadCover(at url: URL?, recordedAs fingerprint: String?) -> Data? {
+        guard fingerprint != SyncedCover.noCover, let url,
+              let data = try? Data(contentsOf: url), CoverImage.isStorable(data) else { return nil }
+        if let fingerprint, ContentFingerprint.of(data) != fingerprint { return nil }
+        return data
     }
 
     /// Splits books, in order, into runs saved together: each run's `sizes`

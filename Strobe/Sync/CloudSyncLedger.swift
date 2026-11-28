@@ -11,6 +11,8 @@ nonisolated struct LocalDocumentSnapshot: Equatable {
     /// Shown by a reader, book page, or alert right now, so it can't be
     /// removed yet.
     var isOpen = false
+    /// `Document.coverFingerprint`: nil without a cover.
+    var coverFingerprint: String? = nil
 }
 
 /// What reconciliation found for iCloud sync to do.
@@ -24,6 +26,10 @@ nonisolated struct ReconcilePlan: Equatable {
     /// Positions to write into local documents: a removed copy's reading
     /// handed to the copy that stays.
     var positionUpdates: [UUID: ReadingPosition] = [:]
+    /// Covers to hand over before a copy leaves, by the document that takes
+    /// one: a merged copy's cover, kept by the book it merges into when that
+    /// one has none.
+    var coverHandoffs: [UUID: UUID] = [:]
 }
 
 /// What this device knows about its library in iCloud: each document's
@@ -86,6 +92,10 @@ nonisolated struct CloudSyncLedger: Codable {
         var origin: Origin?
         /// When iCloud first saved the book record.
         var bookCreatedAt: Date?
+        /// The cover iCloud has, as a ``SyncedCover`` fingerprint. Nil for
+        /// books not yet in iCloud, and for entries from builds before covers
+        /// synced, which `reconcile` counts as having no cover in iCloud.
+        var syncedCover: String?
     }
 
     /// `CKSyncEngine`'s own state: change tokens and pending changes.
@@ -130,6 +140,11 @@ nonisolated struct CloudSyncLedger: Codable {
     /// engine that fetched under a build without sessions has moved past
     /// theirs, so they're fetched once on their own (`LibrarySync`).
     var hasFetchedSessions: Bool?
+    /// Whether this ledger's fetches have taken in every book's cover. An
+    /// engine that fetched under a build that didn't read covers has moved
+    /// past them, so they're fetched once on their own (`LibrarySync`).
+    /// Nil, as an older ledger decodes, counts as not yet.
+    var hasFetchedCovers: Bool?
 
     /// A book from iCloud this device couldn't take in. The engine's change
     /// token has moved past its record, so it's fetched again directly.
@@ -260,6 +275,18 @@ nonisolated struct CloudSyncLedger: Codable {
         let presentIDs = Set(documents.map(\.id))
         var snapshots = Dictionary(documents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
+        // A book in iCloud with no cover remembered was confirmed before
+        // covers synced, or by a record without a cover: iCloud has none.
+        // No build before covers kept one either, so a first launch sends
+        // nothing, and a cover set here since (while sync was off, say) is
+        // sent like any other.
+        for document in snapshots.values {
+            let key = document.id.uuidString
+            if entries[key]?.bookSystemFields != nil, entries[key]?.syncedCover == nil {
+                entries[key]?.syncedCover = SyncedCover.noCover
+            }
+        }
+
         // Until a full fetch has shown what iCloud has, there may be copies
         // this ledger hasn't seen.
         if hasFetchedEverything {
@@ -304,6 +331,15 @@ nonisolated struct CloudSyncLedger: Codable {
                     snapshots[keeperID]?.position = position
                     plan.positionUpdates[keeperID] = position
                 }
+                // A copy imported here may have a cover the book in iCloud
+                // lacks (imported by an older build, say): the book keeps
+                // it, and sends it like any changed cover.
+                if case .mergedInto = removal, let keeperID,
+                   let cover = document.coverFingerprint,
+                   let keeper = snapshots[keeperID], keeper.coverFingerprint == nil {
+                    snapshots[keeperID]?.coverFingerprint = cover
+                    plan.coverHandoffs[keeperID] = id
+                }
                 plan.removals.append(id)
                 snapshots[id] = nil
             }
@@ -331,7 +367,8 @@ nonisolated struct CloudSyncLedger: Codable {
             // Still shown while waiting to leave: nothing to send for it.
             guard entry.removal == nil else { continue }
             entry.hasLocalDocument = true
-            if entry.bookSystemFields == nil || entry.syncedTitle != document.title {
+            if entry.bookSystemFields == nil || entry.syncedTitle != document.title
+                || Self.coverChanged(entry, coverFingerprint: document.coverFingerprint) {
                 plan.saves.append(CloudRecordKey(.book, document.id))
             }
             if entry.stateSystemFields == nil || entry.syncedState?.position != document.position {
@@ -506,6 +543,81 @@ nonisolated struct CloudSyncLedger: Codable {
         return renamedHere ? nil : fields.title
     }
 
+    // MARK: Covers
+
+    /// Whether a document's cover, `coverFingerprint`, differs from the one
+    /// iCloud has. None remembered isn't a change until `reconcile` counts
+    /// it as no cover.
+    static func coverChanged(_ entry: Entry, coverFingerprint: String?) -> Bool {
+        guard let synced = entry.syncedCover else { return false }
+        return synced != SyncedCover.of(coverFingerprint)
+    }
+
+    /// Whether the document's cover differs from the one iCloud has, so its
+    /// book record is saved again.
+    func coverChanged(_ id: UUID, coverFingerprint: String?) -> Bool {
+        entry(for: id).map { Self.coverChanged($0, coverFingerprint: coverFingerprint) } ?? false
+    }
+
+    /// Whether to take the cover a fetched book record carries, `remote`
+    /// (nil when the record doesn't say), for a book here whose cover is
+    /// `localCover`: it differs, and no cover changed here waits to be
+    /// sent. As with titles, a change made here and not yet sent wins over
+    /// iCloud's, and is sent over it. With no cover remembered (a ledger
+    /// that started over, or a new book), nothing here counts as changed,
+    /// so iCloud's is taken.
+    func takesCover(_ remote: String?, for id: UUID, localCover: String?) -> Bool {
+        guard let remote else { return false }
+        let local = SyncedCover.of(localCover)
+        guard remote != local else { return false }
+        guard let synced = entry(for: id)?.syncedCover else { return true }
+        return synced == local
+    }
+
+    /// Takes in the cover a fetched book record carries, for a book already
+    /// here, after `receiveBook`. Returns whether to take it (`takesCover`);
+    /// the ledger then records it once it's taken (`coverTaken`), so a cover
+    /// that can't be read leaves both the document and the ledger as they
+    /// were, and nothing is sent over it. Otherwise it's recorded as
+    /// iCloud's now, so a cover changed here is compared with it, and sent.
+    /// A record that doesn't say changes nothing.
+    mutating func receiveCover(_ remote: String?, for id: UUID, localCover: String?) -> Bool {
+        guard let remote else { return false }
+        if takesCover(remote, for: id, localCover: localCover) { return true }
+        entries[id.uuidString]?.syncedCover = remote
+        return false
+    }
+
+    /// Records a cover from iCloud the document took.
+    mutating func coverTaken(_ remote: String, for id: UUID) {
+        entries[id.uuidString]?.syncedCover = remote
+    }
+
+    /// Whether every book's cover is still to be fetched once: a full fetch
+    /// has finished, but under a build that didn't read covers.
+    var needsCoverCatchUp: Bool {
+        hasFetchedEverything && hasFetchedCovers != true
+    }
+
+    /// Takes in covers the catch-up fetched, as `receiveCover` takes in a
+    /// fetched change, for the books here that are in iCloud and staying.
+    /// `localCovers` holds those documents' covers as ``SyncedCover``
+    /// fingerprints. Returns the covers to take, each then recorded by
+    /// `coverTaken`; the rest are recorded now. Others are passed over, so
+    /// the catch-up never adds or removes a book.
+    mutating func receiveCaughtUpCovers(_ covers: [FetchedCover], localCovers: [UUID: String]) -> [FetchedCover] {
+        var toTake: [FetchedCover] = []
+        for cover in covers {
+            let id = cover.documentID
+            guard let local = localCovers[id], let entry = entry(for: id), entry.hasLocalDocument,
+                  entry.removal == nil, entry.bookSystemFields != nil, !isPendingDelete(id) else { continue }
+            if receiveCover(cover.fingerprint, for: id, localCover: local) {
+                toTake.append(cover)
+            }
+        }
+        return toTake
+    }
+
     /// Takes in a reading state record. `local` is the document's current
     /// position, or nil when its book hasn't arrived; the state then waits
     /// in the ledger for it. Returns the position the document should show,
@@ -581,13 +693,15 @@ nonisolated struct CloudSyncLedger: Codable {
         entries[id.uuidString]?.contentHash = contentHash
     }
 
-    /// Records a save iCloud confirmed. `title` and `state` are the values
-    /// the saved record carries.
+    /// Records a save iCloud confirmed. `title`, `state`, and `cover` (a
+    /// ``SyncedCover`` fingerprint) are the values the saved record
+    /// carries; nil for one it doesn't.
     mutating func confirmSaved(
         _ record: CloudRecordKey,
         systemFields: Data,
         title: String?,
-        state: StampedReadingPosition?
+        state: StampedReadingPosition?,
+        cover: String? = nil
     ) {
         let key = record.documentID.uuidString
         // Deleted here while the save was in flight: the deletion follows.
@@ -599,6 +713,7 @@ nonisolated struct CloudSyncLedger: Codable {
                 entry.bookCreatedAt = createdAt
             }
             if let title { entry.syncedTitle = title }
+            if let cover { entry.syncedCover = cover }
         case .state:
             entry.stateSystemFields = systemFields
             if let state {
@@ -626,6 +741,7 @@ nonisolated struct CloudSyncLedger: Codable {
         case .book:
             entry.bookSystemFields = nil
             entry.syncedTitle = nil
+            entry.syncedCover = nil
         case .state:
             entry.stateSystemFields = nil
             entry.syncedState = nil
