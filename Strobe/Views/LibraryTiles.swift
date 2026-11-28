@@ -20,6 +20,7 @@ extension DocumentCover {
 struct DocumentTile: View {
     let document: Document
     let onRename: () -> Void
+    let onEditCover: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -73,6 +74,9 @@ struct DocumentTile: View {
     private var actions: some View {
         Button(action: onRename) {
             Label("Rename…", systemImage: "pencil")
+        }
+        Button(action: onEditCover) {
+            Label("Edit Cover…", systemImage: "photo")
         }
         Button(role: .destructive, action: onDelete) {
             Label("Delete", systemImage: "trash")

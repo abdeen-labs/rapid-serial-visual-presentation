@@ -39,6 +39,8 @@ struct ContentView: View {
     @State private var showTextInput = false
     @State private var documentPendingDeletion: Document?
     @State private var documentPendingRename: Document?
+    /// The document whose cover is being edited (`CoverEditor`).
+    @State private var documentPendingCoverEdit: Document?
     @State private var renameText = ""
     @State private var searchText = ""
     @State private var isDropTargeted = false
@@ -93,6 +95,7 @@ struct ContentView: View {
         hasSeenTutorial && !showWelcome && !showSettings && !showStatistics && !showTextInput
             && !isImporting && !isReviewingDuplicates && navigationPath.isEmpty
             && documentPendingRename == nil && documentPendingDeletion == nil
+            && documentPendingCoverEdit == nil
             && importError == nil && persistenceError == nil
     }
 
@@ -208,6 +211,7 @@ struct ContentView: View {
         } message: { doc in
             Text("\u{201C}\(doc.title)\u{201D} will be permanently removed from your library.")
         }
+        .editsCover(of: $documentPendingCoverEdit)
         // A document in an open alert stays until the alert closes, even if
         // it's deleted on another device meanwhile.
         .onChange(of: documentPendingRename?.id) { old, new in
@@ -294,6 +298,7 @@ struct ContentView: View {
                         DocumentTile(
                             document: document,
                             onRename: { beginRename(document) },
+                            onEditCover: { documentPendingCoverEdit = document },
                             onDelete: { documentPendingDeletion = document }
                         )
                     }
