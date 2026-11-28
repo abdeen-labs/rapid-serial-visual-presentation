@@ -50,7 +50,22 @@ nonisolated enum WhatsNew {
 
     /// Every release, newest first.
     static let releases: [Release] = [
-        Release(version: "3.7.1", items: [
+        Release(version: "3.8", items: [
+            Item(
+                symbol: "book.closed",
+                title: "Book Covers",
+                detail: "EPUBs and PDFs you import now show the book's own cover in the library, the reader, and the widget. A book without one keeps its generated cover."
+            ),
+            Item(
+                symbol: "photo",
+                title: "Edit a Cover",
+                detail: "Choose a photo for any cover, or remove one, with Edit Cover in a book's menu in the library. Covers sync with iCloud."
+            ),
+            Item(
+                symbol: "text.quote",
+                title: "Where You Left Off",
+                detail: "Continue Reading and the medium widget show the sentence you stopped on."
+            ),
             Item(
                 symbol: "character.book.closed",
                 title: "Look Up Has Moved",
