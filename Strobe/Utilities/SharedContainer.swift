@@ -16,6 +16,11 @@ nonisolated enum SharedContainer {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     }
 
+    /// Where the app writes the Continue Reading widget's cover thumbnail.
+    static var widgetCoversURL: URL? {
+        containerURL?.appending(path: "WidgetCovers", directoryHint: .isDirectory)
+    }
+
     /// The group's shared defaults.
     static var defaults: UserDefaults? {
         UserDefaults(suiteName: appGroupID)

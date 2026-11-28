@@ -7,6 +7,8 @@ struct EPUBExtractionResult {
     let title: String?
     /// Where blocks end: block elements and the end of each spine document.
     var blockEnds: BlockEnds = .none
+    /// The book's cover as a ``CoverImage``, if it names one that reads.
+    var coverImage: Data? = nil
 }
 
 /// Extracts tokenized words and chapter structure from EPUB files.
@@ -105,7 +107,135 @@ enum EPUBTextExtractor {
         let allChapters = deduplicateChapters(chapters + headingChapters)
             .filter { words.indices.contains($0.wordIndex) }
 
-        return EPUBExtractionResult(words: words, chapters: allChapters, title: opf.title, blockEnds: blockEnds)
+        try Task.checkCancellation()
+        let cover = opf.coverHref.flatMap { href in
+            autoreleasepool { coverImage(href: href, opfDir: opfDir, epubRoot: tempDir) }
+        }
+
+        return EPUBExtractionResult(
+            words: words, chapters: allChapters, title: opf.title, blockEnds: blockEnds, coverImage: cover
+        )
+    }
+
+    // MARK: - Cover
+
+    /// Cover pages are small; a larger one isn't read.
+    nonisolated private static let maxCoverPageBytes = 4 << 20
+
+    /// The cover `href` names (an image, or a page showing one) as a
+    /// ``CoverImage``. Nil whenever it can't be read: a book imports without
+    /// its cover rather than not at all.
+    nonisolated private static func coverImage(href: String, opfDir: URL, epubRoot: URL) -> Data? {
+        guard var url = archiveFile(href, relativeTo: opfDir, in: epubRoot) else { return nil }
+        if ["xhtml", "html", "htm", "xml"].contains(url.pathExtension.lowercased()) {
+            guard let page = readFile(url, maxBytes: maxCoverPageBytes),
+                  let source = coverImageSource(inPage: page),
+                  let imageURL = archiveFile(source, relativeTo: url.deletingLastPathComponent(), in: epubRoot)
+            else { return nil }
+            url = imageURL
+        }
+        guard let data = readFile(url, maxBytes: CoverImage.maxSourceBytes) else { return nil }
+        return CoverImage.encode(imageData: data)
+    }
+
+    /// The image a cover page shows: its first `<img>`, or the first SVG
+    /// `<image>`, as many EPUB 2 cover pages draw it. The path is relative
+    /// to the page.
+    nonisolated static func coverImageSource(inPage data: Data) -> String? {
+        let parser = SimpleXMLParser()
+        parser.parse(data: data)
+        for element in parser.elements {
+            let source: String? = switch element.name {
+            case "img": element.attributes["src"]
+            case "image": element.attributes["xlink:href"] ?? element.attributes["href"]
+            default: nil
+            }
+            if let source = source.map({ pathPart($0) }), !source.isEmpty { return source }
+        }
+        return nil
+    }
+
+    /// The cover the package file names, relative to it; see
+    /// ``coverHref(in:)``.
+    nonisolated static func coverHref(inOPF data: Data) -> String? {
+        let parser = SimpleXMLParser()
+        parser.parse(data: data)
+        return coverHref(in: parser.elements)
+    }
+
+    /// The cover in a package file's elements, by the first rule that finds
+    /// one: the EPUB 3 manifest item marked `cover-image`; the item EPUB 2's
+    /// `<meta name="cover">` names (by ID, or by path as some books write
+    /// it); the guide's cover page; or else an image item called "cover".
+    nonisolated private static func coverHref(in elements: [SimpleXMLParser.Element]) -> String? {
+        var items: [(id: String, href: String, mediaType: String)] = []
+        var coverImageItem: String?
+        var coverMeta: String?
+        var guideCover: String?
+
+        for element in elements {
+            switch element.name {
+            case "item":
+                guard let id = element.attributes["id"], let href = element.attributes["href"] else { continue }
+                let decodedHref = href.removingPercentEncoding ?? href
+                items.append((id, decodedHref, element.attributes["media-type"]?.lowercased() ?? ""))
+                if coverImageItem == nil,
+                   let properties = element.attributes["properties"],
+                   properties.split(whereSeparator: \.isWhitespace).contains("cover-image") {
+                    coverImageItem = decodedHref
+                }
+            case "meta":
+                if coverMeta == nil, element.attributes["name"]?.lowercased() == "cover",
+                   let content = element.attributes["content"], !content.isEmpty {
+                    coverMeta = content
+                }
+            case "reference":
+                if guideCover == nil, element.attributes["type"]?.lowercased() == "cover",
+                   let href = element.attributes["href"] {
+                    let path = pathPart(href)
+                    if !path.isEmpty { guideCover = path }
+                }
+            default:
+                break
+            }
+        }
+
+        if let coverImageItem { return coverImageItem }
+        if let coverMeta {
+            if let item = items.first(where: { $0.id == coverMeta }) { return item.href }
+            let path = coverMeta.removingPercentEncoding ?? coverMeta
+            if let item = items.first(where: { $0.href == path }) { return item.href }
+        }
+        if let guideCover { return guideCover }
+        return items.first { item in
+            item.mediaType.hasPrefix("image/")
+                && (item.id.lowercased().contains("cover")
+                    || (item.href as NSString).lastPathComponent.lowercased().contains("cover"))
+        }?.href
+    }
+
+    /// A link's path: without its fragment or query, percent-decoded.
+    nonisolated private static func pathPart(_ link: String) -> String {
+        let end = link.firstIndex(where: { $0 == "#" || $0 == "?" }) ?? link.endIndex
+        let path = String(link[..<end])
+        return path.removingPercentEncoding ?? path
+    }
+
+    /// The file `path` names relative to `base`, if it's inside the
+    /// unzipped book.
+    nonisolated private static func archiveFile(_ path: String, relativeTo base: URL, in epubRoot: URL) -> URL? {
+        guard !path.isEmpty else { return nil }
+        let url = base.appendingPathComponent(path).standardizedFileURL
+        let rootPath = epubRoot.standardizedFileURL.path
+        guard url.path.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/") else { return nil }
+        return url
+    }
+
+    /// A file's contents, unless it's missing or larger than `maxBytes`.
+    nonisolated private static func readFile(_ url: URL, maxBytes: Int) -> Data? {
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+              size > 0, size <= maxBytes else { return nil }
+        return try? Data(contentsOf: url)
     }
 
     // MARK: - DRM detection
@@ -198,6 +328,7 @@ enum EPUBTextExtractor {
         let tocID: String?                // NCX manifest ID
         let navHref: String?              // EPUB3 nav document href
         let title: String?                // <dc:title>
+        let coverHref: String?            // see `coverHref(in:)`
     }
 
     /// Parses the OPF package file to extract manifest items, reading order, and metadata.
@@ -250,7 +381,8 @@ enum EPUBTextExtractor {
             spineItems: spineItems,
             tocID: tocID,
             navHref: navHref,
-            title: title
+            title: title,
+            coverHref: coverHref(in: parser.elements)
         )
     }
 

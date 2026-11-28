@@ -1,12 +1,16 @@
 import SwiftUI
 
 extension DocumentCover {
+    /// The document's own cover once it's decoded (``CoverImageCache``),
+    /// or else the generated one.
     init(document: Document, showsText: Bool = true) {
+        let cover = CoverImageCache.shared.cover(for: document)
         self.init(
             title: document.title,
             kind: document.kind,
             tone: CoverTone.tone(for: document.id),
-            showsText: showsText
+            showsText: showsText && !cover.isPending,
+            artwork: cover.image
         )
     }
 }

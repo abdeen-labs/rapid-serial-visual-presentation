@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// A generated book cover: the document's title set in Fraunces on a deep
-/// tone chosen from its ID, a spine along the leading edge, and the file
-/// kind at the foot. Sized by the width it's given, at a 2:3 ratio.
+/// A book cover: the book's own when it has one (`artwork`), cropped to
+/// fill, or else a generated one: the document's title set in Fraunces on a
+/// deep tone chosen from its ID, a spine along the leading edge, and the
+/// file kind at the foot. Sized by the width it's given, at a 2:3 ratio.
 ///
 /// The widget extension compiles this file too, so it takes plain values;
 /// the app's `init(document:)` is in LibraryTiles.swift.
@@ -12,12 +13,15 @@ struct DocumentCover: View {
     let tone: CoverTone
     /// False for a thumbnail shown beside the title: the tone and spine only.
     var showsText = true
+    /// The book's own cover, drawn in place of the generated one.
+    let artwork: CGImage?
 
-    init(title: String, kind: DocumentKind, tone: CoverTone, showsText: Bool = true) {
+    init(title: String, kind: DocumentKind, tone: CoverTone, showsText: Bool = true, artwork: CGImage? = nil) {
         self.title = title
         self.kind = kind
         self.tone = tone
         self.showsText = showsText
+        self.artwork = artwork
     }
 
     private static let cornerRadius: CGFloat = 4
@@ -27,7 +31,16 @@ struct DocumentCover: View {
             .aspectRatio(2.0 / 3.0, contentMode: .fit)
             .overlay {
                 GeometryReader { geo in
-                    face(width: geo.size.width)
+                    if let artwork {
+                        Image(decorative: artwork, scale: 1)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFill()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                    } else {
+                        face(width: geo.size.width)
+                    }
                 }
             }
             .clipShape(.rect(cornerRadius: Self.cornerRadius, style: .continuous))

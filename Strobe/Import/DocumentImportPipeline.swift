@@ -19,6 +19,10 @@ nonisolated struct ImportResult {
     let title: String?
     /// Where the document's blocks end; none for a PDF.
     var blockEnds: BlockEnds = .none
+    /// The book's own cover, encoded as a ``CoverImage``: an EPUB's cover
+    /// image, or a PDF's first page when it looks like a cover. Nil
+    /// otherwise, which keeps the generated cover.
+    var coverImage: Data? = nil
 }
 
 /// Routes document files to the appropriate extractor based on file type.
@@ -135,7 +139,10 @@ enum DocumentImportPipeline {
             try Task.checkCancellation()
             let complexity = WordComplexityAnalyzer.analyzeComplexity(result.words)
             try Task.checkCancellation()
-            return ImportResult(words: result.words, complexityScores: complexity, chapters: result.chapters, sourceType: .pdf, title: result.title)
+            return ImportResult(
+                words: result.words, complexityScores: complexity, chapters: result.chapters,
+                sourceType: .pdf, title: result.title, coverImage: result.coverImage
+            )
         case .epub:
             let result = try EPUBTextExtractor.extractWordsAndChapters(from: url, cleaningLevel: cleaningLevel)
             try Task.checkCancellation()
@@ -143,7 +150,8 @@ enum DocumentImportPipeline {
             try Task.checkCancellation()
             return ImportResult(
                 words: result.words, complexityScores: complexity, chapters: result.chapters,
-                sourceType: .epub, title: result.title, blockEnds: result.blockEnds
+                sourceType: .epub, title: result.title, blockEnds: result.blockEnds,
+                coverImage: result.coverImage
             )
         case .plainText:
             // Line ends are made plain first: the cleaner splits at every

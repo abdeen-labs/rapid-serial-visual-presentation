@@ -6,6 +6,8 @@ struct PDFExtractionResult {
     let words: [String]
     let chapters: [Chapter]
     let title: String?
+    /// The first page as a ``CoverImage``, when it looks like a cover.
+    var coverImage: Data? = nil
 }
 
 /// Extracts tokenized words and chapter structure from PDF files using PDFKit.
@@ -92,7 +94,46 @@ enum PDFTextExtractor {
 
         let chapters = extractChapters(from: document, pageWordOffsets: pageWordOffsets)
             .filter { result.indices.contains($0.wordIndex) }
-        return PDFExtractionResult(words: result, chapters: chapters, title: title)
+        try Task.checkCancellation()
+        let firstPageWords = pageTexts.first.map { $0.split(whereSeparator: \.isWhitespace).count } ?? 0
+        let cover = document.page(at: 0).flatMap { page in
+            autoreleasepool { coverImage(of: page, wordCount: firstPageWords) }
+        }
+        return PDFExtractionResult(words: result, chapters: chapters, title: title, coverImage: cover)
+    }
+
+    // MARK: - Cover
+
+    /// The page as a ``CoverImage`` when it looks like a cover
+    /// (``CoverImage/looksLikeCover(_:wordCount:)``). A PDF declares no
+    /// cover, and most first pages are text, which keep the generated
+    /// cover. Nil for those, and for a page with no size.
+    nonisolated static func coverImage(of page: PDFPage, wordCount: Int) -> Data? {
+        // A page of text needs no drawing to be passed over.
+        guard wordCount <= CoverImage.maxCoverWords, let image = drawing(of: page),
+              CoverImage.looksLikeCover(image, wordCount: wordCount) else { return nil }
+        return CoverImage.jpegData(image)
+    }
+
+    /// The page drawn on white, as large as a cover is stored, turned as
+    /// the page says.
+    nonisolated static func drawing(of page: PDFPage) -> CGImage? {
+        guard let pageRef = page.pageRef else { return nil }
+        let box = pageRef.getBoxRect(.cropBox)
+        let isTurned = abs(Int(pageRef.rotationAngle)) % 180 == 90
+        let pageSize = isTurned ? CGSize(width: box.height, height: box.width) : box.size
+        // A page is drawn, not scaled, so a small one is enlarged too.
+        guard let size = CoverImage.fittingSize(pageSize, within: CoverImage.maxSize, enlarging: true),
+              let context = CoverImage.makeContext(size: size) else { return nil }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(origin: .zero, size: size))
+        context.interpolationQuality = .high
+        context.scaleBy(x: size.width / pageSize.width, y: size.height / pageSize.height)
+        context.concatenate(pageRef.getDrawingTransform(
+            .cropBox, rect: CGRect(origin: .zero, size: pageSize), rotate: 0, preserveAspectRatio: true
+        ))
+        context.drawPDFPage(pageRef)
+        return context.makeImage()
     }
 
     // MARK: - Chapter extraction

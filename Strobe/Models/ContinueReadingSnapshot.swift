@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 /// What the Continue Reading widget shows: the document to pick up next, as
 /// the app last saved it.
@@ -34,6 +35,11 @@ nonisolated struct ContinueReadingSnapshot: Codable, Equatable {
         /// (`ResumePreview`), for the medium widget. Nil when it has none, or
         /// in a snapshot saved before previews.
         var preview: String? = nil
+        /// The document's cover as a thumbnail file in
+        /// ``SharedContainer/widgetCoversURL``, or nil for the generated
+        /// cover. Named for the document and its cover, so a new document
+        /// or a changed cover reloads the widget.
+        var coverFileName: String? = nil
 
         var kind: DocumentKind { DocumentKind(fileName: fileName) }
         var status: ReadingStatus { ReadingStatus(progress: progress) }
@@ -54,6 +60,23 @@ nonisolated struct ContinueReadingSnapshot: Codable, Equatable {
                 }
             }
             return letters > 0 && arabic * 2 > letters
+        }
+
+        /// The name of the thumbnail the app writes for `documentID`'s
+        /// cover with this fingerprint (`Document.coverFingerprint`).
+        static func coverFileName(for documentID: UUID, fingerprint: String?) -> String {
+            guard let fingerprint, !fingerprint.isEmpty else { return "\(documentID.uuidString).jpg" }
+            return "\(documentID.uuidString)-\(fingerprint.prefix(12)).jpg"
+        }
+
+        /// The cover thumbnail, or nil when there's none or it can't be
+        /// read, which leaves the generated cover.
+        func loadCover() -> CGImage? {
+            guard let coverFileName,
+                  let url = SharedContainer.widgetCoversURL?.appending(path: coverFileName),
+                  let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  CGImageSourceGetCount(source) > 0 else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
         }
     }
 

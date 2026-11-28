@@ -252,7 +252,8 @@ private struct Backdrop: View {
     }
 }
 
-/// The document's generated cover. The tinted and clear styles keep only
+/// The document's cover: the book's own when the app left a thumbnail,
+/// or else the generated one. The tinted and clear styles keep only
 /// each view's opacity, which would turn the cover into a solid block, so
 /// there it's a translucent card with a book symbol.
 private struct WidgetCover: View {
@@ -266,7 +267,8 @@ private struct WidgetCover: View {
                 title: item.title,
                 kind: item.kind,
                 tone: CoverTone.tone(for: item.id),
-                showsText: showsText
+                showsText: showsText,
+                artwork: item.loadCover()
             )
         } else {
             RoundedRectangle(cornerRadius: 4, style: .continuous)

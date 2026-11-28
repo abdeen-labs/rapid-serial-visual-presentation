@@ -208,6 +208,16 @@ struct ReaderView: View {
         }
     }
 
+    /// Gives Now Playing the document's title and cover, as they stand.
+    private func updateNowPlayingItem() {
+        readAloud.nowPlayingItem = ReadAloudNowPlaying.Item(
+            id: document.id,
+            title: document.title,
+            cover: DocumentCover(document: document),
+            coverFingerprint: document.coverFingerprint
+        )
+    }
+
     /// Pairs the document's quotation and bracket marks for the enclosing
     /// marks display, once the words are loaded and the setting is on. Runs
     /// off-main: it scans every word of the document.
@@ -399,11 +409,13 @@ struct ReaderView: View {
         }
         // What Now Playing shows while a voice reads, renamed or not.
         .onChange(of: document.title, initial: true) {
-            readAloud.nowPlayingItem = ReadAloudNowPlaying.Item(
-                id: document.id,
-                title: document.title,
-                cover: DocumentCover(document: document)
-            )
+            updateNowPlayingItem()
+        }
+        // Now Playing draws the cover once, so it waits for the book's own
+        // cover to decode.
+        .task(id: document.id) {
+            _ = await CoverImageCache.shared.load(document)
+            updateNowPlayingItem()
         }
         .marksDocumentOpen(document.id)
         .keepsVoiceModelLoaded(holdsVoiceModel)

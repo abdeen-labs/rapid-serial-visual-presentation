@@ -53,12 +53,16 @@ nonisolated enum CloudSyncSchema {
         /// before block ends were recorded, and for PDFs. Older builds don't
         /// read it, so it needs no new `bookFormat`.
         static let blockEnds = "blockEnds"
+        /// The book's own cover (``CoverImage``), as an asset. Absent for
+        /// books without one and books imported before covers were kept.
+        /// Older builds don't read it, so it needs no new `bookFormat`.
+        static let coverImage = "coverImage"
 
         /// Every field. `CloudSchemaSeed` sets them all; a new field goes
         /// here too.
         static let all = [
             format, title, fileName, dateAdded, wordCount, chapters, chaptersAsset,
-            contentHash, words, complexity, blockEnds,
+            contentHash, words, complexity, blockEnds, coverImage,
         ]
     }
 
@@ -139,6 +143,7 @@ nonisolated enum CloudSchemaSeed {
             BlockEndStorage.encode(BlockEnds([0: .block])) ?? Data(), named: "blockEnds"
         )
         book[CloudSyncSchema.BookField.chaptersAsset] = try asset(JSONEncoder().encode(chapters), named: "chapters")
+        book[CloudSyncSchema.BookField.coverImage] = try asset(Data([0xFF, 0xD8, 0xFF, 0xD9]), named: "coverImage")
 
         let state = CKRecord(
             recordType: CloudSyncSchema.RecordType.readingState,
@@ -484,6 +489,7 @@ nonisolated struct BookUpload {
     let wordsURL: URL?
     let complexityURL: URL?
     let blockEndsURL: URL?
+    let coverImageURL: URL?
     /// Only for chapter lists too long for the record.
     let chaptersURL: URL?
     let contentHash: String
@@ -500,6 +506,7 @@ nonisolated struct BookUpload {
         words: Data,
         complexity: Data?,
         blockEnds: Data? = nil,
+        coverImage: Data? = nil,
         chapters: [Chapter]
     ) throws -> BookUpload {
         let fileManager = FileManager.default
@@ -512,6 +519,7 @@ nonisolated struct BookUpload {
         let wordsURL = try words.isEmpty ? nil : write(words, as: "words")
         let complexityURL = try complexity.flatMap { $0.isEmpty ? nil : try write($0, as: "complexity") }
         let blockEndsURL = try blockEnds.flatMap { $0.isEmpty ? nil : try write($0, as: "blockEnds") }
+        let coverImageURL = try coverImage.flatMap { $0.isEmpty ? nil : try write($0, as: "coverImage") }
         let chapterData = try JSONEncoder().encode(chapters)
         let chaptersURL = try chapterData.count > CloudSyncSchema.maxInlineChapterBytes
             ? write(chapterData, as: "chapters")
@@ -520,10 +528,11 @@ nonisolated struct BookUpload {
             wordsURL: wordsURL,
             complexityURL: complexityURL,
             blockEndsURL: blockEndsURL,
+            coverImageURL: coverImageURL,
             chaptersURL: chaptersURL,
             contentHash: ContentFingerprint.of(words),
             byteCount: words.count + (complexity?.count ?? 0) + (blockEnds?.count ?? 0)
-                + (chaptersURL == nil ? 0 : chapterData.count)
+                + (coverImage?.count ?? 0) + (chaptersURL == nil ? 0 : chapterData.count)
         )
     }
 
@@ -532,8 +541,8 @@ nonisolated struct BookUpload {
     }
 }
 
-/// A downloaded book's words, complexity scores, and block ends, checked
-/// against its record.
+/// A downloaded book's words, complexity scores, block ends, and cover,
+/// checked against its record.
 nonisolated struct BookContent {
     let words: Data
     let complexity: Data?
@@ -542,6 +551,8 @@ nonisolated struct BookContent {
     /// Block ends that all fall inside the words; nil when the book has none
     /// or they don't fit it.
     var blockEnds: Data?
+    /// The book's cover; nil when it has none or it isn't an image.
+    var coverImage: Data? = nil
 
     /// Reads the asset files CloudKit downloaded. Returns nil when the words
     /// are missing or don't match the record's fingerprint.
@@ -550,6 +561,7 @@ nonisolated struct BookContent {
         complexityURL: URL?,
         chaptersURL: URL? = nil,
         blockEndsURL: URL? = nil,
+        coverImageURL: URL? = nil,
         fields: BookRecordFields
     ) -> BookContent? {
         let words: Data
@@ -578,7 +590,13 @@ nonisolated struct BookContent {
                 guard let last = ends.lastIndex, last < fields.wordCount else { return nil }
                 return data
             }
-        return BookContent(words: words, complexity: complexity, chapters: chapters, blockEnds: blockEnds)
+        // A cover that isn't an image leaves the generated one.
+        let coverImage = coverImageURL
+            .flatMap { try? Data(contentsOf: $0) }
+            .flatMap { CoverImage.isStorable($0) ? $0 : nil }
+        return BookContent(
+            words: words, complexity: complexity, chapters: chapters, blockEnds: blockEnds, coverImage: coverImage
+        )
     }
 
     /// Splits books, in order, into runs saved together: each run's `sizes`

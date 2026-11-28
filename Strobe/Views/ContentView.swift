@@ -728,6 +728,7 @@ extension ContentView {
                     wordsPerMinute: defaultWPM
                 )
                 document.blockEndsBlob = extracted.blockEndsBlob
+                document.setCover(extracted.result.coverImage)
                 modelContext.insert(document)
                 try modelContext.save()
             } catch is CancellationError {

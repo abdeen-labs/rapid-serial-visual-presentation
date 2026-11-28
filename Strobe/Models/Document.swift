@@ -30,6 +30,16 @@ final class Document {
     /// format has none (PDF); it then reads without block pauses. Never
     /// changes after import.
     @Attribute(.externalStorage) var blockEndsBlob: Data? = nil
+    /// The document's cover, a ``CoverImage`` JPEG: the book's own, kept at
+    /// import, or a photo chosen with Edit Cover. Nil for a document
+    /// without one (most PDFs, text, Markdown, web articles, anything
+    /// imported before covers were kept, and one whose cover was removed),
+    /// which shows the generated cover. Set only through `setCover(_:)`.
+    @Attribute(.externalStorage) var coverImageData: Data? = nil
+    /// The cover's fingerprint (`ContentFingerprint`), nil without a cover.
+    /// It says whether the cover changed without reading the image: sync
+    /// compares it, and the widget's thumbnail is named for it.
+    var coverFingerprint: String? = nil
     var chapters: [Chapter]
     var currentWordIndex: Int
     /// The furthest word index ever reached, used for progress display only —

@@ -29,13 +29,16 @@ final class ReadAloudNowPlaying {
         var id: UUID
         var title: String
         var cover: DocumentCover
+        /// Which cover it is (`Document.coverFingerprint`), so a changed
+        /// one is drawn again.
+        var coverFingerprint: String? = nil
     }
 
     /// The reader that has the entry.
     private weak var owner: ReadAloudController?
     private var hasTargets = false
-    /// The last cover drawn, by document and title, so pausing and playing
-    /// don't draw it again.
+    /// The last cover drawn, by document, title, and how it was drawn, so
+    /// pausing and playing don't draw it again.
     private var artwork: (key: String, artwork: MPMediaItemArtwork)?
 
     /// The size covers are drawn at, in points, at 2:3 like the library's.
@@ -124,9 +127,11 @@ final class ReadAloudNowPlaying {
 
     // MARK: - Artwork
 
-    /// The document's cover, drawn once for each document and title.
+    /// The document's cover, drawn once for each document and title, and
+    /// again when its own cover has decoded.
     private func artwork(for item: Item) -> MPMediaItemArtwork? {
-        let key = "\(item.id.uuidString) \(item.title)"
+        let key = "\(item.id.uuidString) \(item.title) \(item.cover.artwork != nil) "
+            + "\(item.coverFingerprint ?? "") \(item.cover.showsText)"
         if let artwork, artwork.key == key { return artwork.artwork }
         let renderer = ImageRenderer(content: item.cover.frame(width: Self.artworkSize.width, height: Self.artworkSize.height))
         #if os(iOS)
