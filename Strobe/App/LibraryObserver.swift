@@ -17,6 +17,8 @@ final class LibraryObserver {
     /// The titles Siri last learned, so they're only sent again after a
     /// change.
     private var shortcutTitles: [UUID: String]?
+    /// Refreshes once the up-next document's preview is worked out.
+    private var previewTask: Task<Void, Never>?
 
     /// Starts observing the library, once per launch.
     static func start(container: ModelContainer) {
@@ -53,8 +55,28 @@ final class LibraryObserver {
 
     private func refresh() {
         guard let documents = try? container.mainContext.fetch(FetchDescriptor<Document>()) else { return }
-        publish(ContinueReadingSnapshot(documents: documents))
+        var snapshot = ContinueReadingSnapshot(documents: documents)
+        addPreview(to: &snapshot, from: documents)
+        publish(snapshot)
         updateShortcutTitlesIfNeeded(for: documents)
+    }
+
+    /// Adds the up-next document's ``ResumePreview``. A new resume position
+    /// publishes at once with the preview it had, and again once the new
+    /// one is worked out.
+    private func addPreview(to snapshot: inout ContinueReadingSnapshot, from documents: [Document]) {
+        guard let id = snapshot.item?.id,
+              let document = documents.first(where: { $0.id == id }) else { return }
+        let previews = ResumePreviews.shared
+        snapshot.item?.preview = previews.preview(for: document)
+        guard !previews.isCurrent(for: document) else { return }
+        previews.prepare(document)
+        previewTask?.cancel()
+        previewTask = Task {
+            await previews.waitForPending(id)
+            guard !Task.isCancelled else { return }
+            self.refresh()
+        }
     }
 
     /// Saves the snapshot for the widget and reloads it, if anything

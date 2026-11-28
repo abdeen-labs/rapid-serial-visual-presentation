@@ -66,7 +66,8 @@ nonisolated extension ContinueReadingSnapshot {
             fileName: "Pride and Prejudice.epub",
             progress: 0.42,
             chapterTitle: "Chapter 12",
-            remainingMinutes: 185
+            remainingMinutes: 185,
+            preview: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother…"
         ),
         libraryIsEmpty: false
     )

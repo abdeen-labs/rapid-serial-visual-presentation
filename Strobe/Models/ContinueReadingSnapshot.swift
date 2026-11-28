@@ -30,10 +30,31 @@ nonisolated struct ContinueReadingSnapshot: Codable, Equatable {
         let chapterTitle: String?
         /// Minutes to finish from the resume position.
         let remainingMinutes: Int
+        /// The document's text from the start of the sentence it resumes in
+        /// (`ResumePreview`), for the medium widget. Nil when it has none, or
+        /// in a snapshot saved before previews.
+        var preview: String? = nil
 
         var kind: DocumentKind { DocumentKind(fileName: fileName) }
         var status: ReadingStatus { ReadingStatus(progress: progress) }
         var link: AppLink { .reader(documentID: id) }
+
+        /// Whether the preview is mostly Arabic script, so it reads right to
+        /// left whatever the interface's direction.
+        var previewIsRightToLeft: Bool {
+            guard let preview else { return false }
+            var arabic = 0
+            var letters = 0
+            for scalar in preview.unicodeScalars where scalar.properties.isAlphabetic {
+                letters += 1
+                if (0x0600...0x06FF).contains(scalar.value) || (0x0750...0x077F).contains(scalar.value)
+                    || (0x08A0...0x08FF).contains(scalar.value) || (0xFB50...0xFDFF).contains(scalar.value)
+                    || (0xFE70...0xFEFF).contains(scalar.value) {
+                    arabic += 1
+                }
+            }
+            return letters > 0 && arabic * 2 > letters
+        }
     }
 
     /// The saved snapshot, or nil if none is saved or it can't be read.

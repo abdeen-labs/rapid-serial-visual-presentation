@@ -114,41 +114,63 @@ private struct MediumContent: View {
             WidgetCover(item: item, showsText: true)
                 .frame(width: 80)
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text(item.status == .new ? "Up Next" : "Continue Reading")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text(item.title)
-                    .font(StrobeTheme.displayFont(size: 19, relativeTo: .title3))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-                    .padding(.top, 2)
-
-                if let chapterTitle = item.chapterTitle {
-                    Text(chapterTitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.top, 2)
-                }
-
-                Spacer(minLength: 8)
-
-                WidgetProgressBar(progress: item.progress)
-
-                Text(item.progressLine)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.top, 6)
+            // The preview takes what room the title leaves: two lines, one,
+            // or none.
+            ViewThatFits(in: .vertical) {
+                details(previewLines: 2)
+                details(previewLines: 1)
+                details(previewLines: 0)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(item.accessibilityLabel)
+        .accessibilityLabel(item.accessibilityLabelWithPreview)
+    }
+
+    private func details(previewLines: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(item.status == .new ? "Up Next" : "Continue Reading")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(item.title)
+                .font(StrobeTheme.displayFont(size: 19, relativeTo: .title3))
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .padding(.top, 2)
+
+            if let chapterTitle = item.chapterTitle {
+                Text(chapterTitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.top, 2)
+            }
+
+            if let preview = item.preview, previewLines > 0 {
+                Text(verbatim: preview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(previewLines)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.layoutDirection, item.previewIsRightToLeft ? .rightToLeft : .leftToRight)
+                    .padding(.top, 4)
+            }
+
+            Spacer(minLength: 8)
+
+            WidgetProgressBar(progress: item.progress)
+
+            Text(item.progressLine)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.top, 6)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -382,5 +404,11 @@ private extension ContinueReadingSnapshot.Item {
         ]
         .compactMap { $0 }
         .joined(separator: ", ")
+    }
+
+    /// The label with the preview, for the medium size, the only one that
+    /// shows it.
+    var accessibilityLabelWithPreview: String {
+        [accessibilityLabel, preview].compactMap { $0 }.joined(separator: ", ")
     }
 }

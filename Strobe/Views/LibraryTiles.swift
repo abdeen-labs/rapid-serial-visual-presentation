@@ -152,13 +152,14 @@ struct ContinueReadingCard: View {
         let minutesLeft = document.remainingMinutes
         let chapterTitle = ChapterTimeline(document.chapters).chapter(containing: document.currentWordIndex)?.title
         let progressLine = "\(status.label) · \(ReadingTime.label(minutes: minutesLeft)) left"
+        let preview = ResumePreviews.shared.preview(for: document)
 
         NavigationLink(value: ReaderRoute(document: document)) {
             Group {
                 if isWide {
-                    wideLayout(chapterTitle: chapterTitle, progressLine: progressLine)
+                    wideLayout(chapterTitle: chapterTitle, progressLine: progressLine, preview: preview)
                 } else {
-                    compactLayout(chapterTitle: chapterTitle, progressLine: progressLine)
+                    compactLayout(chapterTitle: chapterTitle, progressLine: progressLine, preview: preview)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -168,7 +169,7 @@ struct ContinueReadingCard: View {
         .buttonStyle(StrobeCardButtonStyle())
         .accessibilityLabel("Continue reading \(document.title)")
         .accessibilityValue(
-            [chapterTitle, status.label, "\(ReadingTime.spokenLabel(minutes: minutesLeft)) left"]
+            [chapterTitle, status.label, "\(ReadingTime.spokenLabel(minutes: minutesLeft)) left", preview]
                 .compactMap { $0 }
                 .joined(separator: ", ")
         )
@@ -177,9 +178,12 @@ struct ContinueReadingCard: View {
         .task(id: ReadingPace.shared.key(for: document)) {
             ReadingPace.shared.prepare(document)
         }
+        .task(id: ResumePreviews.shared.key(for: document)) {
+            ResumePreviews.shared.prepare(document)
+        }
     }
 
-    private func wideLayout(chapterTitle: String?, progressLine: String) -> some View {
+    private func wideLayout(chapterTitle: String?, progressLine: String, preview: String?) -> some View {
         HStack(spacing: 18) {
             DocumentCover(document: document, showsText: false)
                 .frame(width: 56)
@@ -194,6 +198,11 @@ struct ContinueReadingCard: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .padding(.top, 3)
+                if let preview {
+                    previewText(preview, lineLimit: 2, maxWidth: 520)
+                        .font(wideDetailFont)
+                        .padding(.top, 6)
+                }
                 ReadingProgressBar(progress: document.progress)
                     .frame(maxWidth: 280)
                     .padding(.top, 10)
@@ -206,7 +215,7 @@ struct ContinueReadingCard: View {
         .padding(16)
     }
 
-    private func compactLayout(chapterTitle: String?, progressLine: String) -> some View {
+    private func compactLayout(chapterTitle: String?, progressLine: String, preview: String?) -> some View {
         HStack(alignment: .top, spacing: 14) {
             DocumentCover(document: document, showsText: false)
                 .frame(width: 64)
@@ -221,6 +230,11 @@ struct ContinueReadingCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .padding(.top, 2)
+                }
+                if let preview {
+                    previewText(preview, lineLimit: 3, maxWidth: .infinity)
+                        .font(.footnote)
+                        .padding(.top, 6)
                 }
 
                 Spacer(minLength: 12)
@@ -242,6 +256,18 @@ struct ContinueReadingCard: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(14)
+    }
+
+    /// The document's own text where reading resumes, aligned the way its
+    /// script reads.
+    private func previewText(_ preview: String, lineLimit: Int, maxWidth: CGFloat) -> some View {
+        Text(verbatim: preview)
+            .foregroundStyle(.secondary)
+            .lineLimit(lineLimit)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: maxWidth, alignment: .leading)
+            .environment(\.layoutDirection, PassageView.isRTLDominant([preview]) ? .rightToLeft : .leftToRight)
     }
 
     private var label: some View {

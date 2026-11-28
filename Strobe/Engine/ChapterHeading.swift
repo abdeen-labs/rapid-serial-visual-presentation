@@ -124,7 +124,7 @@ nonisolated enum ChapterHeading {
     private static let maximumNumberingLength = 24
 
     /// The most words read from a chapter's start.
-    private static let maximumHeadingWords = 64
+    static let maximumHeadingWords = 64
 
     // MARK: - Letters
 
